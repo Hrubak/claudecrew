@@ -6,6 +6,8 @@ rem Tells Crew this script restarts it, so an in-app update can restart itself.
 set CREW_SUPERVISED=1
 if not exist data mkdir data
 rem Node: NODE_EXE if set, else the first node.exe on PATH, else the default install folder.
+rem The installer may have put a private copy of Node next to Crew (runtime\node); use it first.
+if not defined NODE_EXE if exist "%~dp0runtime\node\node.exe" set "NODE_EXE=%~dp0runtime\node\node.exe"
 if not defined NODE_EXE for /f "delims=" %%N in ('where node 2^>nul') do if not defined NODE_EXE set "NODE_EXE=%%N"
 if not defined NODE_EXE set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
 

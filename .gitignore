@@ -6,3 +6,6 @@ crew.config.json
 env_vars.txt
 *secrets*
 .env
+
+install-log.txt
+runtime/

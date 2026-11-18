@@ -25,22 +25,24 @@ Crew drives the `claude` command you already have, so it runs on your Claude sub
 
 - **Node.js 20 or newer.**
 - **Claude Code CLI**, installed and logged in. Run `claude` once in a terminal and finish the login (or run `claude auth login`). A Claude Pro/Max subscription or another account Claude Code accepts.
-- **OS:** Windows 10/11 is the main, tested platform. The server and web page are plain Node and run on macOS and Linux. The tray icon, autostart and launcher scripts are Windows-only (see [docs/SETUP.md](docs/SETUP.md#windows-only-pieces)).
+- **OS:** Windows 10/11 is the main, tested platform. The server and web page are plain Node and run on macOS and Linux. The tray icon, autostart and launcher scripts are Windows-only (see [docs/SETUP.md](docs/SETUP-ADVANCED.md#windows-only-pieces)).
 - **git** (optional), for change tracking and undo in project folders.
 
 ## Quick start
 
-**Windows.** Paste this into PowerShell. It installs what is missing (Node.js, Claude Code), downloads Crew to `C:Crew`, starts it, and turns on autostart:
+**Windows (easiest).** Click the green **Code** button on this page, choose **Download ZIP**, right-click the zip and **Extract All**, then double-click **INSTALL.bat**. It asks a few plain questions (your name, phone access, which folders you want helpers for), installs what is missing, writes your settings and opens Crew. No administrator rights needed. Full step-by-step with fixes for work laptops: [docs/SETUP.md](docs/SETUP.md).
+
+Prefer one line? Paste this into PowerShell (it installs to your user folder, in `ClaudeCrew`):
 
 ```powershell
 irm https://raw.githubusercontent.com/hast3/claudecrew/main/install.ps1 | iex
 ```
 
-Then type `claude` once in a terminal to sign in. Run the same line again any time to update.
+Run it again any time to update.
 
 **Another PC for the same crew?** On the hub open **🖥 Machines → Get pairing code**. It shows a one-line command with the code filled in. Paste it into PowerShell on the new PC.
 
-**Mac, Linux or by hand:** `git clone https://github.com/hast3/claudecrew`, copy `crew.config.example.json` to `crew.config.json`, then `npm start`. New to Claude Code or the terminal? [docs/SETUP.md](docs/SETUP.md) walks through everything, including a table of what to run and when.
+**Mac, Linux or by hand:** `git clone https://github.com/hast3/claudecrew`, copy `crew.config.example.json` to `crew.config.json`, then `npm start`. New to Claude Code or the terminal? [docs/SETUP-ADVANCED.md](docs/SETUP-ADVANCED.md) walks through everything.
 
 ## How it works
 
