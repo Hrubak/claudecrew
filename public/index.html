@@ -336,6 +336,52 @@
   .fgrid input[readonly] { opacity: .6; }
   .fgrid .wide2 { grid-column: 1 / -1; }
   .sagent { border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: grid; gap: 10px; }
+  /* settings panel */
+  #setDlg { width: min(980px, 96vw); height: min(700px, calc(100dvh - 40px)); }
+  #setDlg[open] { display: flex; flex-direction: column; }
+  #setDlg .dlg-head { flex: none; }
+  #setQ { flex: 0 1 240px; min-width: 0; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+  .setsaved { font-size: 12px; color: var(--muted); white-space: nowrap; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+  .setsaved.ok { color: var(--ok); } .setsaved.err { color: var(--err); }
+  #setBody { padding: 0; gap: 0; flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 190px minmax(0, 1fr); }
+  #sNav { padding: 10px; border-right: 1px solid var(--border); overflow-y: auto; }
+  #sNav a { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; color: var(--muted); cursor: pointer; margin-bottom: 2px; white-space: nowrap; }
+  #sNav a.on { background: var(--panel-2); color: var(--text); font-weight: 600; }
+  #sNav a small { margin-left: auto; font-size: 10px; } #sNav a small.c { color: var(--warn); } #sNav a small.r { color: var(--err); }
+  #sNav a small + small { margin-left: 2px; }
+  #sMain { overflow-y: auto; padding: 16px 20px; min-width: 0; }
+  .ssec { display: none; } .ssec.on, .searching .ssec { display: block; } .ssec[hidden] { display: none !important; }
+  .ssh { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; } .ssh h4 { margin: 0; font-size: 15px; flex: 1; }
+  .scard { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 14px; }
+  .srow { display: flex; gap: 14px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .srow:last-child { border-bottom: 0; } .srow[hidden] { display: none; } .srow2 { margin-top: -4px; }
+  .srow .l { flex: 1; min-width: 0; } .srow b { font-weight: 600; } .srow p { margin: 2px 0 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .sub { font-size: 12px; color: var(--muted); margin: 0 2px 6px; }
+  .bdg { font-size: 10px; padding: 1px 6px; border-radius: 99px; margin-left: 6px; border: 1px solid; vertical-align: 1px; white-space: nowrap; }
+  .bdg.cost { color: var(--warn); border-color: var(--warn); } .bdg.risk { color: var(--err); border-color: var(--err); }
+  .bdg.free { color: var(--ok); border-color: var(--ok); } .bdg.rs { color: var(--muted); border-color: var(--border); }
+  .sw { position: relative; width: 38px; height: 22px; flex: none; } .sw input { opacity: 0; position: absolute; inset: 0; margin: 0; cursor: pointer; z-index: 1; }
+  .sw i { position: absolute; inset: 0; background: var(--border); border-radius: 99px; transition: .2s; }
+  .sw i::after { content: ""; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: .2s; }
+  .sw input:checked + i { background: var(--accent); } .sw input:checked + i::after { left: 19px; } .sw input:focus-visible + i { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ctl { display: flex; gap: 10px; align-items: center; width: 250px; flex: none; } .ctl input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+  .ctl .val { min-width: 84px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; }
+  #setBody .stx { width: 250px; flex: none; box-sizing: border-box; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+  .step { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: none; }
+  .step button { border: 0; background: var(--panel-2); color: var(--text); width: 32px; cursor: pointer; font-size: 16px; }
+  #setBody .step .stn { width: 52px; border: 0; text-align: center; background: var(--bg); color: var(--text); font: inherit; -moz-appearance: textfield; }
+  .step .stn::-webkit-inner-spin-button { display: none; }
+  .warnbox { background: color-mix(in srgb, var(--warn) 12%, transparent); border: 1px solid var(--warn); border-radius: 10px; padding: 9px 12px; font-size: 12px; margin-bottom: 12px; }
+  #rsBanner { position: sticky; top: -16px; z-index: 2; display: flex; gap: 10px; align-items: center; background: color-mix(in srgb, var(--accent) 14%, var(--panel)); border: 1px solid var(--accent); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+  #rsBanner[hidden] { display: none; } #rsBanner span { flex: 1; }
+  .snone { color: var(--muted); padding: 20px 0; text-align: center; }
+  @media (max-width: 800px) {
+    #setDlg { width: 100vw; max-width: 100vw; margin: auto 0 0; height: 92dvh; max-height: 92dvh; border-radius: 16px 16px 0 0; }
+    #setBody { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    #sNav { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); padding: 6px; } #sNav a { margin: 0 2px 0 0; }
+    .srow { flex-wrap: wrap; } .ctl, #setBody .stx { width: 100%; } .srow .btn { margin-left: auto; }
+    #setQ { flex: 1 1 100px; } .setsaved { max-width: 30%; }
+  }
   .setfoot { position: sticky; bottom: 0; background: var(--panel); padding: 10px 0 2px; border-top: 1px solid var(--border); }
   .diff { font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre; overflow: auto; margin: 0; background: var(--code); border-radius: 8px; padding: 8px 0; max-height: 65dvh; }
   .diff span { display: block; padding: 0 10px; min-width: max-content; }
@@ -510,8 +556,12 @@
   <div class="dlg-body" id="notesBody"></div>
 </dialog>
 <dialog id="setDlg">
-  <div class="dlg-head"><h3>Settings</h3><button class="x" data-close>×</button></div>
+  <div class="dlg-head"><h3>🛠 Settings</h3><span id="setSaved" class="setsaved"></span><input id="setQ" type="search" placeholder="Search settings…" autocomplete="off"><button class="x" data-close>×</button></div>
   <div class="dlg-body" id="setBody"></div>
+</dialog>
+<dialog id="agEditDlg">
+  <div class="dlg-head"><h3 id="agEditTitle">Agent</h3><button class="x" data-close>×</button></div>
+  <div class="dlg-body" id="agEditBody"></div>
 </dialog>
 <dialog id="agentDlg">
   <div class="dlg-head"><h3 id="agentTitle">Agent</h3><button class="x" data-close>×</button></div>
@@ -1753,75 +1803,178 @@
         <label class="wide2">Instructions<textarea data-k="instructions">${esc(a.instructions)}</textarea></label>
       </div></div>`;
   }
+  const SET_DEF = { sModel: '', sPerm: 'auto', sConc: 2, sHops: 6, sClaude: '', sEffort: 'low', sRef: 110000, sAutoRef: false, sWo: 200000, sWs: 200000, sWh: 200000, sJudge: false, sJudgeModel: 'haiku', sBud: true, sB5: 85, sBW: 95 };
+  let agDraft = [];
+  let setBase = {};
   function renderSettings() {
     const s = cfg.settings, b = s.budget;
-    $('#setBody').innerHTML = `
-      <div class="section"><h5>General</h5><div class="fgrid">
-        <label>Your name<input type="text" id="sUser" value="${esc(s.userName)}"></label>
-        <label>Default agent<select id="sDef">${cfg.agents.map((a) => opt(a.id, a.name || a.id, s.defaultAgent)).join('')}</select></label>
-        <label>Machine name<input type="text" id="sMach" value="${esc(s.machineName)}"></label>
-        <label>Port<input type="number" id="sPort" value="${esc(s.port)}" min="1024" max="65535"></label>
-        <label class="chk"><input type="checkbox" id="sLan" ${s.allowLan ? 'checked' : ''}> Allow other devices on my network</label>
-      </div></div>
-      <div class="section"><h5>Agents</h5><div class="fgrid">
-        <label>Default model<select id="sModel">${opt('', 'Let Crew choose', s.model)}${cfg.modelChoices.map((m) => opt(m, m, s.model)).join('')}</select></label>
-        <label>Permission mode<select id="sPerm">${cfg.permissionModes.map((m) => opt(m, m, s.permissionMode)).join('')}</select></label>
-        <label>Agents working at once<input type="number" id="sConc" value="${esc(s.maxConcurrent)}" min="1" max="20"></label>
-        <label>Hand-off depth<input type="number" id="sHops" value="${esc(s.maxHops)}" min="0" max="20"></label>
-        <label class="wide2">Claude CLI path (blank = auto-detect)<input type="text" id="sClaude" value="${esc(s.claudePath)}"></label>
-      </div></div>
-      <div class="section"><h5>Routing</h5><div class="fgrid">
-        <label>Default effort<select id="sEffort">${cfg.effortChoices.map((e) => opt(e, e, s.effort)).join('')}</select></label>
-        <label class="chk"><input type="checkbox" id="sJudge" ${s.judge.enabled ? 'checked' : ''}> Enable the judge (off = no judge calls)</label>
-        <label>Judge model<select id="sJudgeModel">${cfg.modelChoices.map((m) => opt(m, m, s.judge.model)).join('')}</select></label>
-      </div><div class="small">Effort applies to every agent unless you pick another in its dialog. Routing changes apply right away.</div></div>
-      <div class="section"><h5>Usage guard</h5><div class="fgrid">
-        <label class="chk"><input type="checkbox" id="sBud" ${b.enabled ? 'checked' : ''}> Hold new work near plan limits</label>
-        <label>5-hour limit (%)<input type="number" id="sB5" value="${Math.round(b.fiveHour * 100)}" min="1" max="100"></label>
-        <label>Refresh banner at (tokens)<input type="number" id="sRef" value="${esc(s.refreshTokens)}" min="10000" max="2000000" step="10000"></label>
-        <label class="chk"><input type="checkbox" id="sAutoRef" ${s.autoRefresh ? 'checked' : ''}> Auto-refresh when idle and over that size</label>
-        <label>Opus context window (tokens)<input type="number" id="sWo" value="${esc(s.contextWindows?.opus)}" min="10000" step="10000"></label>
-        <label>Sonnet context window (tokens)<input type="number" id="sWs" value="${esc(s.contextWindows?.sonnet)}" min="10000" step="10000"></label>
-        <label>Haiku context window (tokens)<input type="number" id="sWh" value="${esc(s.contextWindows?.haiku)}" min="10000" step="10000"></label>
-        <label>Weekly limit (%)<input type="number" id="sBW" value="${Math.round(b.weekly * 100)}" min="1" max="100"></label>
-      </div></div>
-      <div class="section"><h5>Crew members</h5><div id="sAgents" style="display:grid;gap:10px">${cfg.agents.map(agentCard).join('')}</div>
-        <div class="row" style="margin-top:8px"><button class="btn" id="sAddAgent" type="button">+ Add agent</button></div></div>
-      <div class="section"><h5>🖥 Machines</h5><div id="setMach"></div></div>
-      <div class="section"><h5>🔌 Integrations</h5><div id="setInt"></div></div>
-      <div class="small">Cloudflare and machine pairing are not editable here; they stay in crew.config.json. A backup is saved as crew.config.json.bak.</div>
-      <div class="setfoot row"><button class="btn primary" id="sSave" type="button">Save</button><button class="btn" id="sSaveRs" type="button">Save and restart</button><span class="small grow" id="sMsg"></span></div>`;
-    const wire = (card) => { card.querySelector('[data-rm]').onclick = () => { if ($('#sAgents').children.length > 1) { card.remove(); syncDefault(); } }; };
-    const syncDefault = () => {
-      const cur = $('#sDef').value;
-      $('#sDef').innerHTML = [...$('#sAgents').children].map((c) => {
-        const id = c.querySelector('[data-k=id]').value.trim().toLowerCase();
-        return id ? opt(id, c.querySelector('[data-k=name]').value || id, cur) : '';
-      }).join('');
+    agDraft = cfg.agents.map((a) => ({ ...a }));
+    setBase = { port: s.port, allowLan: !!s.allowLan };
+    const BD = {
+      cost: '<span class="bdg cost" title="Uses more of your plan usage">$$ costs usage</span>',
+      risk: '<span class="bdg risk" title="Safety setting: controls what agents may do without asking">⚠ safety</span>',
+      rs: '<span class="bdg rs">restart</span>', free: '<span class="bdg free">free</span>',
     };
-    $('#sAgents').querySelectorAll('[data-agent]').forEach(wire);
-    $('#sAgents').addEventListener('input', syncDefault);
-    $('#sAddAgent').onclick = () => {
-      $('#sAgents').insertAdjacentHTML('beforeend', agentCard({ _new: true, id: '', name: '', emoji: '', cwd: '', description: '', instructions: '', model: '', permissionMode: '' }));
-      const c = $('#sAgents').lastElementChild; wire(c); c.scrollIntoView({ block: 'center' });
-    };
-    const save = async (restart) => {
+    const row = (name, help, ctl, bd = '') => `<div class="srow" data-live data-s="${esc((name + ' ' + help).toLowerCase())}"><div class="l"><b>${name}</b>${bd}<p>${help}</p></div>${ctl}</div>`;
+    const tg = (id, on) => `<label class="sw"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><i></i></label>`;
+    const sel = (id, o) => `<select id="${id}" class="stx">${o}</select>`;
+    const txt = (id, v, ph = '') => `<input class="stx" type="text" id="${id}" value="${esc(v)}" placeholder="${esc(ph)}">`;
+    const rng = (id, v, mn, mx, st, u) => `<div class="ctl"><input type="range" id="${id}" min="${Math.min(mn, v)}" max="${Math.max(mx, v)}" step="${st}" value="${v}" data-u="${u}"><span class="val"></span></div>`;
+    const stp = (id, v, mn, mx) => `<div class="step"><button type="button" data-st="-1" aria-label="less">−</button><input class="stn" type="number" id="${id}" min="${mn}" max="${mx}" value="${esc(v)}"><button type="button" data-st="1" aria-label="more">+</button></div>`;
+    const SECS = [
+      ['gen', '⚙', 'General', '', `<div class="scard">
+        ${row('Your name', 'Shown on your messages.', txt('sUser', s.userName))}
+        ${row('Default agent', 'Who answers when you don’t @mention anyone.', sel('sDef', cfg.agents.map((a) => opt(a.id, a.name || a.id, s.defaultAgent)).join('')))}
+        ${row('Machine name', 'How this PC appears to paired devices.', txt('sMach', s.machineName))}
+        ${row('Port', 'Where Crew listens on this PC.', `<input class="stx" type="number" id="sPort" value="${esc(s.port)}" min="1024" max="65535">`, BD.rs)}
+        ${row('Allow other devices on my network', 'Lets your phone reach Crew over Wi-Fi. Only on networks you trust.', tg('sLan', s.allowLan), BD.rs)}</div>`],
+      ['mod', '🧠', 'Models & Effort', 'cost risk', `<div class="scard">
+        ${row('Default model', '“Let Crew choose” picks by task size.', sel('sModel', opt('', 'Let Crew choose', s.model) + cfg.modelChoices.map((m) => opt(m, m, s.model)).join('')))}
+        ${row('Default effort', 'Higher effort thinks longer and spends more tokens. Agents can override it.', sel('sEffort', cfg.effortChoices.map((e) => opt(e, e, s.effort)).join('')), BD.cost)}
+        ${row('Permission mode', 'What agents may do without asking you first. Looser modes can edit files and run commands unattended.', sel('sPerm', cfg.permissionModes.map((m) => opt(m, m, s.permissionMode)).join('')), BD.risk)}
+        ${row('Agents working at once', 'More in parallel is faster but uses your plan faster.', stp('sConc', s.maxConcurrent, 1, 20), BD.cost)}
+        ${row('Hand-off depth', 'How many times agents may pass work to each other (and spawn follow-ups).', stp('sHops', s.maxHops, 0, 20), BD.cost)}
+        ${row('Claude CLI path', 'Blank = auto-detect.', txt('sClaude', s.claudePath, 'auto'))}</div>`],
+      ['ctx', '📏', 'Context & Refresh', 'cost', `<div class="scard">
+        ${row('Refresh threshold', 'Suggest a fresh session once an agent’s context passes this size. Shown as the tick on the Overview gauge.', rng('sRef', s.refreshTokens, 10000, 2000000, 10000, 'tokens'), BD.free)}
+        ${row('Auto-refresh when idle', 'Summarises and restarts an idle agent that is over the threshold. Spends tokens on the hand-off summary.', tg('sAutoRef', s.autoRefresh), BD.cost)}</div>
+        <div class="sub">Context windows (the gauge is measured against these)</div><div class="scard">
+        ${row('Opus window', 'Model context size.', rng('sWo', s.contextWindows?.opus || 200000, 10000, 2000000, 10000, 'tokens'))}
+        ${row('Sonnet window', 'Model context size.', rng('sWs', s.contextWindows?.sonnet || 200000, 10000, 2000000, 10000, 'tokens'))}
+        ${row('Haiku window', 'Model context size.', rng('sWh', s.contextWindows?.haiku || 200000, 10000, 2000000, 10000, 'tokens'))}</div>`],
+      ['jud', '🧭', 'Routing & Judge', 'cost', `<div class="warnbox">⚠ The judge makes an extra model call on routed messages, so it uses plan usage. Changes here apply right away.</div><div class="scard">
+        ${row('Enable the judge', 'Picks the best agent for a message. Off = no judge calls.', tg('sJudge', s.judge.enabled), BD.cost)}
+        ${row('Judge model', 'A small model keeps it cheap.', sel('sJudgeModel', cfg.modelChoices.map((m) => opt(m, m, s.judge.model)).join('')))}</div>`],
+      ['gua', '🛡', 'Usage Guard', '', `<div class="scard">
+        ${row('Hold new work near plan limits', 'Queues new tasks instead of starting them close to a limit.', tg('sBud', b.enabled), BD.free)}
+        ${row('5-hour limit', 'Hold when this much of the 5-hour window is used.', rng('sB5', Math.round(b.fiveHour * 100), 1, 100, 1, '%'))}
+        ${row('Weekly limit', 'Hold when this much of the week is used.', rng('sBW', Math.round(b.weekly * 100), 1, 100, 1, '%'))}</div>`],
+      ['crew', '👥', 'Crew members', '', `<div class="scard" id="sAgentList"></div><div class="srow2"><button class="btn" id="sAddAgent" type="button">+ Add agent</button></div>`, 'ns'],
+      ['mach', '🖥', 'Machines', '', '<div id="setMach"></div>', 'ns'],
+      ['int', '🔌', 'Integrations', '', '<div id="setInt"></div><div class="small" style="margin-top:8px">Cloudflare and machine pairing stay in crew.config.json. A backup is saved as crew.config.json.bak.</div>', 'ns'],
+    ];
+    const resettable = new Set(['mod', 'ctx', 'jud', 'gua']);
+    $('#setBody').innerHTML = `<nav id="sNav">${SECS.map(([k, ic, t, fl], i) => `<a data-k="${k}" class="${i ? '' : 'on'}">${ic} <span>${t}</span>${fl.includes('cost') ? '<small class="c">$$</small>' : ''}${fl.includes('risk') ? '<small class="r">⚠</small>' : ''}</a>`).join('')}</nav>
+      <div id="sMain"><div id="rsBanner" hidden><span>Port or network access changed. Restart Crew to apply.</span><button class="btn primary" id="rsNow" type="button">Restart now</button></div>
+      ${SECS.map(([k, , t, , h, ns], i) => `<section class="ssec ${i ? '' : 'on'}" data-k="${k}" ${ns ? 'data-ns' : ''}><div class="ssh"><h4>${t}</h4>${resettable.has(k) ? '<button class="btn" data-reset type="button">Reset to defaults</button>' : ''}</div>${h}</section>`).join('')}
+      <div class="snone" hidden>No settings match.</div></div>`;
+    const unit = (el) => { const v = +el.value, u = el.dataset.u; return u === 'tokens' ? (v >= 1e6 ? +(v / 1e6).toFixed(2) + 'M' : Math.round(v / 1000) + 'k') + ' tokens' : v + (u === '%' ? '%' : ''); };
+    const lbl = (el) => { el.nextElementSibling.textContent = unit(el); };
+    $('#setBody').querySelectorAll('input[type=range]').forEach(lbl);
+    // ----- live save
+    const $st = $('#setSaved');
+    const state = (k, msg) => { $st.className = 'setsaved ' + k; $st.textContent = msg; if (k === 'ok') { clearTimeout(state.t); state.t = setTimeout(() => { if ($st.classList.contains('ok')) $st.textContent = ''; }, 1800); } };
+    let saveT = 0, saving = false;
+    const payload = () => {
       const num = (id) => +$(id).value;
-      const agentsOut = [...$('#sAgents').children].map((c) => Object.fromEntries([...c.querySelectorAll('[data-k]')].map((el) => [el.dataset.k, el.value])));
-      const body = { settings: {
+      return { settings: {
         userName: $('#sUser').value, defaultAgent: $('#sDef').value, machineName: $('#sMach').value, port: num('#sPort'), allowLan: $('#sLan').checked,
         model: $('#sModel').value || null, permissionMode: $('#sPerm').value, maxConcurrent: num('#sConc'), maxHops: num('#sHops'), claudePath: $('#sClaude').value, refreshTokens: num('#sRef'), contextWindows: { opus: num('#sWo'), sonnet: num('#sWs'), haiku: num('#sWh') }, autoRefresh: $('#sAutoRef').checked,
         effort: $('#sEffort').value, judge: { enabled: $('#sJudge').checked, model: $('#sJudgeModel').value },
         budget: { enabled: $('#sBud').checked, fiveHour: num('#sB5') / 100, weekly: num('#sBW') / 100 },
-      }, agents: agentsOut };
-      const r = await api('/api/config', body);
-      if (!r.ok) return;
-      cfg = { ...cfg, ...(await (await fetch('/api/config')).json()) };
-      $('#sMsg').textContent = restart ? '' : 'Saved. Restart Crew to apply.';
-      if (restart) { $('#setDlg').close(); await restartCrew(); }
+      }, agents: agDraft };
     };
-    $('#sSave').onclick = () => save(false);
-    $('#sSaveRs').onclick = () => save(true);
+    async function doSave() {
+      clearTimeout(saveT);
+      while (saving) await new Promise((ok) => setTimeout(ok, 40));
+      saving = true; state('busy', 'Saving…');
+      let res = { ok: false, error: 'Offline' };
+      try {
+        const r = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Crew': '1' }, body: JSON.stringify(payload()) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.ok !== false) {
+          cfg = { ...cfg, ...(await (await fetch('/api/config')).json()) };
+          res = { ok: true }; state('ok', '✓ Saved');
+          $('#rsBanner').hidden = !(+$('#sPort').value !== setBase.port || $('#sLan').checked !== setBase.allowLan);
+        } else { res = { ok: false, error: j.error || 'Could not save' }; state('err', res.error); }
+      } catch { state('err', 'Offline'); }
+      saving = false; return res;
+    }
+    const sched = (ms) => { clearTimeout(saveT); saveT = setTimeout(doSave, ms); };
+    const body = $('#setBody');
+    body.oninput = (e) => {
+      const t = e.target;
+      if (t.type === 'range') return lbl(t);
+      if (t.closest('[data-live]') && t.matches('.stx[type=text], .stn, .stx[type=number]')) sched(800);
+    };
+    body.onchange = (e) => { const t = e.target; if (t.closest('[data-live]')) sched(t.type === 'range' ? 250 : 300); };
+    body.onclick = (e) => {
+      const st = e.target.closest('[data-st]');
+      if (st) { const i = st.parentElement.querySelector('input'); i.value = Math.min(+i.max, Math.max(+i.min, (+i.value || 0) + +st.dataset.st)); i.dispatchEvent(new Event('change', { bubbles: true })); return; }
+      const nv = e.target.closest('#sNav a');
+      if (nv) { $('#setQ').value = ''; filt(''); showSec(nv.dataset.k); return; }
+      if (e.target.closest('[data-reset]')) {
+        const sec = e.target.closest('.ssec');
+        sec.querySelectorAll('[id]').forEach((el) => {
+          if (!(el.id in SET_DEF)) return;
+          if (el.type === 'checkbox') el.checked = SET_DEF[el.id]; else el.value = SET_DEF[el.id];
+          if (el.type === 'range') lbl(el);
+        });
+        doSave();
+      }
+      if (e.target.closest('#rsNow')) { $('#setDlg').close(); restartCrew(); }
+    };
+    // ----- nav + search
+    const showSec = (k) => { body.querySelectorAll('#sNav a').forEach((a) => a.classList.toggle('on', a.dataset.k === k)); body.querySelectorAll('.ssec').forEach((x) => { x.hidden = false; x.classList.toggle('on', x.dataset.k === k); }); $('#sMain').scrollTop = 0; };
+    function filt(q) {
+      q = q.trim().toLowerCase();
+      body.classList.toggle('searching', !!q);
+      let any = false;
+      body.querySelectorAll('.ssec').forEach((sec) => {
+        if (!q) { sec.hidden = false; sec.querySelectorAll('.srow').forEach((r) => { r.hidden = false; }); return; }
+        let n = 0;
+        sec.querySelectorAll('.srow').forEach((r) => { const m = (r.dataset.s || '').includes(q); r.hidden = !m; if (m) n++; });
+        sec.hidden = sec.hasAttribute('data-ns') || !n; if (n) any = true;
+      });
+      body.querySelector('.snone').hidden = !q || any;
+      if (!q) showSec(body.querySelector('#sNav a.on')?.dataset.k || 'gen');
+    }
+    $('#setQ').value = ''; $('#setQ').oninput = (e) => filt(e.target.value);
+    // ----- crew members (edited in a dialog)
+    const syncDefault = () => {
+      const cur = $('#sDef').value;
+      $('#sDef').innerHTML = agDraft.map((a) => opt(a.id, a.name || a.id, cur)).join('');
+    };
+    const agList = () => {
+      $('#sAgentList').innerHTML = agDraft.map((a, i) => `<div class="srow"><div class="l"><b>${esc(a.emoji || '')} ${esc(a.name || a.id)}</b> <span class="small">@${esc(a.id)}</span><p>${esc(a.model || 'default model')} · ${esc(a.permissionMode || 'default permissions')} · ${esc(a.cwd || '')}</p></div><button class="btn" data-ed="${i}" type="button">Edit</button></div>`).join('');
+    };
+    agList();
+    $('#sAgentList').onclick = (e) => { const bt = e.target.closest('[data-ed]'); if (bt) agEdit(+bt.dataset.ed); };
+    $('#sAddAgent').onclick = () => agEdit(-1);
+    function agEdit(i) {
+      const isNew = i < 0, a = isNew ? { id: '', name: '', emoji: '', cwd: '', description: '', instructions: '', model: '', permissionMode: '' } : agDraft[i];
+      $('#agEditTitle').textContent = isNew ? 'New agent' : `${a.emoji || ''} ${a.name || a.id}`;
+      $('#agEditBody').innerHTML = `<div class="fgrid">
+        <label>ID (used for @mentions)<input type="text" data-k="id" value="${esc(a.id)}" ${isNew ? '' : 'readonly'}></label>
+        <label>Name<input type="text" data-k="name" value="${esc(a.name)}"></label>
+        <label>Emoji<input type="text" data-k="emoji" value="${esc(a.emoji)}" maxlength="8"></label>
+        <label>Model<select data-k="model">${opt('', 'Default', a.model)}${cfg.modelChoices.map((m) => opt(m, m, a.model)).join('')}</select></label>
+        <label>Permission mode ${BD.risk}<select data-k="permissionMode">${opt('', 'Default', a.permissionMode)}${cfg.permissionModes.map((m) => opt(m, m, a.permissionMode)).join('')}</select></label>
+        <label class="wide2">Folder<input type="text" data-k="cwd" value="${esc(a.cwd)}" placeholder="C:/Projects/my-app"></label>
+        <label class="wide2">Description<input type="text" data-k="description" value="${esc(a.description)}"></label>
+        <label class="wide2">Instructions<textarea data-k="instructions">${esc(a.instructions)}</textarea></label></div>
+        <div class="row" style="margin-top:12px"><button class="btn" id="agRm" type="button" ${isNew ? 'hidden' : ''}>Remove agent</button><span class="small grow" id="agErr" style="color:var(--err)"></span><button class="btn primary" id="agOk" type="button">Done</button></div>`;
+      const fail = (m) => { $('#agErr').textContent = m; };
+      $('#agOk').onclick = async () => {
+        const o = Object.fromEntries([...$('#agEditBody').querySelectorAll('[data-k]')].map((el) => [el.dataset.k, el.value]));
+        o.id = String(o.id).trim().toLowerCase();
+        const prev = agDraft.map((x) => ({ ...x }));
+        if (isNew) agDraft.push(o); else agDraft[i] = { ...agDraft[i], ...o };
+        const r = await doSave();
+        if (!r.ok) { agDraft = prev; return fail(r.error); }
+        syncDefault(); agList(); $('#agEditDlg').close();
+      };
+      $('#agRm').onclick = async () => {
+        if (agDraft.length < 2) return fail('Keep at least one agent.');
+        if (!confirm(`Remove ${a.name || a.id}?`)) return;
+        const prev = agDraft.map((x) => ({ ...x })), prevDef = $('#sDef').value;
+        agDraft.splice(i, 1); syncDefault();
+        const r = await doSave();
+        if (!r.ok) { agDraft = prev; syncDefault(); $('#sDef').value = prevDef; return fail(r.error); }
+        agList(); $('#agEditDlg').close();
+      };
+      open('#agEditDlg');
+    }
     renderMachines(); startMachTimer(); renderIntegrations(false);
   }
   $('#setBtn').onclick = async () => {
