@@ -423,6 +423,7 @@
   .fd-h { font-weight: 700; } .fd-h.m { color: var(--accent); } .fd-h.a { color: #8b7cf0; }
   .fd-dim { color: var(--muted); }
   .fd-gauge { display: inline-block; width: 60px; height: 7px; border-radius: 2px; background: var(--panel-2); border: 1px solid var(--border); vertical-align: middle; overflow: hidden; }
+  .fd-gauge { position: relative; } .fd-tick { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text); opacity: .7; z-index: 1; }
   .fd-gauge i { display: block; height: 100%; background: var(--accent); } .fd-gauge i.warn { background: #d98a1f; }
   .fd-cards { display: grid; gap: 6px; }
   .fd-card { border: 1px solid var(--border); border-left: 3px solid #8b7cf0; border-radius: 5px; padding: 5px 8px; display: grid; gap: 1px; }
@@ -774,7 +775,7 @@
   const fmtTokU = (t) => !(t.runs) ? '0' : tokKnown(t) ? fmtTok(tokens(t)) : 'unknown';
   const fmtCostU = (t) => !(t.runs) ? '$0.00' : costKnown(t) ? '$' + (t.costUSD || 0).toFixed(2) : 'unknown';
   const fmtReset = (ts) => { if (!ts) return ''; const m = Math.max(0, Math.round((ts - Date.now()) / 60000)); return ' ↻' + (m >= 1440 ? Math.floor(m / 1440) + 'd' : m >= 60 ? Math.floor(m / 60) + 'h' + (m % 60) + 'm' : m + 'm'); };
-  const gauge = (p, warn) => `<span class="fd-gauge"><i class="${p >= warn ? 'warn' : ''}" style="width:${Math.min(100, Math.max(0, p))}%"></i></span>`;
+  const gauge = (p, warn, tick) => `<span class="fd-gauge">${tick != null && tick >= 0 && tick <= 100 ? `<b class="fd-tick" style="left:${tick}%" title="refresh threshold"></b>` : ''}<i class="${p >= warn ? 'warn' : ''}" style="width:${Math.min(100, Math.max(0, p))}%"></i></span>`;
   async function renderOverview() {
     let u = usage;
     try { u = await (await fetch('/api/usage')).json(); } catch { /* fall back to cached summary */ }
@@ -786,10 +787,10 @@
     const win = (name, w) => w ? `<span>${name} ${gauge(pct(w.utilization), 80)} ${pct(w.utilization)}%<span class="fd-dim">${fmtReset(w.resetsAt)}</span></span>` : `<span class="fd-dim">${name} unknown</span>`;
     const cards = ids.map((id) => {
       const a = agents[id] || {}, t = u?.agents?.[id] || { today: {}, week: {} }, c = cacheState(id);
-      const ctx = a.hasSession ? a.contextTokens : 0, at = a.refreshAt || 0;
-      const cp = at ? Math.round(ctx / at * 100) : 0;
+      const ctx = a.hasSession ? a.contextTokens : 0, win = a.ctxWindow || 0;
+      const cp = win ? Math.round(ctx / win * 100) : 0, tk = win && a.refreshAt ? a.refreshAt / win * 100 : null;
       return `<div class="fd-card ${a.status === 'working' ? 'working' : ''}"><div class="fd-row"><b>${avatar(id, 'mini')} ${esc(a.name || id)}</b><span class="fd-dim">${a.status === 'working' ? '● working' : '○ ' + esc(a.status || 'unknown')}</span></div>
-        <div class="fd-dim">ctx ${a.hasSession ? fmtTok(ctx) + (at ? ' ' + gauge(cp, 80) + ' ' + cp + '%' : '') : 'no session'}${a.queued ? ' · ' + a.queued + ' queued' : ''}</div>
+        <div class="fd-dim">ctx ${a.hasSession ? fmtTok(ctx) + (win ? ' ' + gauge(cp, 80, tk) + ' ' + cp + '%' : ' · window unknown') : 'no session'}${a.queued ? ' · ' + a.queued + ' queued' : ''}</div>
         <div class="fd-dim">${t.today.runs || 0} runs · ${fmtTokU(t.today)} · ${fmtCostU(t.today)} · ${c ? esc(c.text) : 'cache unknown'}</div></div>`;
     }).join('');
     const lr = cur ? u?.last?.[cur] : null;
@@ -807,7 +808,7 @@
       <div class="fd-box agentbox"><div class="fd-h a">agents · ${working} running · ${ids.length} total</div><div class="fd-cards">${cards || '<span class="fd-dim">none</span>'}</div></div>
       <div class="fd-box rcpt">${rcpt}</div>
       <div class="fd-box"><div class="fd-h fd-dim">savings ledger</div><div class="fd-dim">${u?.judgeEnabled ? 'No savings recorded yet.' : 'Empty: the judge is off, so nothing is measured.'}</div></div>
-      <div class="fd-foot">Cost is the API-equivalent; your subscription isn't charged it. Context gauge is measured against the refresh threshold (Crew isn't told the model's window). "unknown" = the stream did not report it.</div>`;
+      <div class="fd-foot">Cost is the API-equivalent; your subscription isn't charged it. Context gauge is measured against the model's window from Settings; the tick marks the refresh threshold. "unknown" = the stream did not report it.</div>`;
   }
   const ovSet = (on) => { document.body.classList.toggle('ovopen', on); $('#ovBtn').classList.toggle('on', on); store.set('crew-overview', on ? '1' : '0'); if (on) renderOverview(); };
   $('#ovBtn').onclick = () => ovSet(!document.body.classList.contains('ovopen'));
@@ -1779,6 +1780,9 @@
         <label>5-hour limit (%)<input type="number" id="sB5" value="${Math.round(b.fiveHour * 100)}" min="1" max="100"></label>
         <label>Refresh banner at (tokens)<input type="number" id="sRef" value="${esc(s.refreshTokens)}" min="10000" max="2000000" step="10000"></label>
         <label class="chk"><input type="checkbox" id="sAutoRef" ${s.autoRefresh ? 'checked' : ''}> Auto-refresh when idle and over that size</label>
+        <label>Opus context window (tokens)<input type="number" id="sWo" value="${esc(s.contextWindows?.opus)}" min="10000" step="10000"></label>
+        <label>Sonnet context window (tokens)<input type="number" id="sWs" value="${esc(s.contextWindows?.sonnet)}" min="10000" step="10000"></label>
+        <label>Haiku context window (tokens)<input type="number" id="sWh" value="${esc(s.contextWindows?.haiku)}" min="10000" step="10000"></label>
         <label>Weekly limit (%)<input type="number" id="sBW" value="${Math.round(b.weekly * 100)}" min="1" max="100"></label>
       </div></div>
       <div class="section"><h5>Crew members</h5><div id="sAgents" style="display:grid;gap:10px">${cfg.agents.map(agentCard).join('')}</div>
@@ -1806,7 +1810,7 @@
       const agentsOut = [...$('#sAgents').children].map((c) => Object.fromEntries([...c.querySelectorAll('[data-k]')].map((el) => [el.dataset.k, el.value])));
       const body = { settings: {
         userName: $('#sUser').value, defaultAgent: $('#sDef').value, machineName: $('#sMach').value, port: num('#sPort'), allowLan: $('#sLan').checked,
-        model: $('#sModel').value || null, permissionMode: $('#sPerm').value, maxConcurrent: num('#sConc'), maxHops: num('#sHops'), claudePath: $('#sClaude').value, refreshTokens: num('#sRef'), autoRefresh: $('#sAutoRef').checked,
+        model: $('#sModel').value || null, permissionMode: $('#sPerm').value, maxConcurrent: num('#sConc'), maxHops: num('#sHops'), claudePath: $('#sClaude').value, refreshTokens: num('#sRef'), contextWindows: { opus: num('#sWo'), sonnet: num('#sWs'), haiku: num('#sWh') }, autoRefresh: $('#sAutoRef').checked,
         effort: $('#sEffort').value, judge: { enabled: $('#sJudge').checked, model: $('#sJudgeModel').value },
         budget: { enabled: $('#sBud').checked, fiveHour: num('#sB5') / 100, weekly: num('#sBW') / 100 },
       }, agents: agentsOut };

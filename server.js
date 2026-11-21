@@ -32,6 +32,7 @@ const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const HISTORY_LIMIT = 400;
 const SUMMARY_DIR = path.join(DATA_DIR, 'summaries');
 const REFRESH_TOKENS_DEFAULT = 110000;
+const CONTEXT_WINDOWS_DEFAULT = { opus: 200000, sonnet: 200000, haiku: 200000 };
 const ID_RE = /^[a-z][a-z0-9-]*$/;
 const MODEL_CHOICES = ['opus', 'sonnet', 'haiku'];
 const EFFORT_CHOICES = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -85,6 +86,7 @@ function loadConfig() {
     budget: s.budget || {},
     refreshTokens: Number.isInteger(s.refreshTokens) && s.refreshTokens >= 10000 ? s.refreshTokens : REFRESH_TOKENS_DEFAULT,
     autoRefresh: s.autoRefresh === true,
+    contextWindows: cleanWindows(s.contextWindows),
     cloudflare: loadCloudflare(raw.cloudflare),
   };
   const agents = raw.agents.map((a) => {
@@ -199,7 +201,7 @@ function editableConfig() {
       maxHops: s.maxHops ?? 6, maxConcurrent: s.maxConcurrent || 2, permissionMode: s.permissionMode || 'auto', model: s.model || null,
       effort: EFFORT_CHOICES.includes(s.effort) ? s.effort : 'low', judge: { enabled: s.judge?.enabled === true, model: MODEL_CHOICES.includes(s.judge?.model) ? s.judge.model : 'haiku' },
       refreshTokens: Number.isInteger(s.refreshTokens) && s.refreshTokens >= 10000 ? s.refreshTokens : REFRESH_TOKENS_DEFAULT,
-      autoRefresh: s.autoRefresh === true,
+      autoRefresh: s.autoRefresh === true, contextWindows: cleanWindows(s.contextWindows),
       claudePath: s.claudePath || '', machineName: s.machineName || '',
       budget: { enabled: s.budget?.enabled !== false, fiveHour: s.budget?.fiveHour ?? 0.85, weekly: s.budget?.weekly ?? 0.95 },
     },
@@ -258,6 +260,9 @@ function saveEditableConfig(input) {
   st.refreshTokens = int(inS.refreshTokens ?? REFRESH_TOKENS_DEFAULT, 10000, 2000000, 'Refresh threshold (tokens)');
   settings.refreshTokens = st.refreshTokens;
   st.autoRefresh = inS.autoRefresh === true;
+  st.contextWindows = {};
+  for (const m of ['opus', 'sonnet', 'haiku']) st.contextWindows[m] = int(inS.contextWindows?.[m] ?? CONTEXT_WINDOWS_DEFAULT[m], 10000, 10000000, `${m} context window`);
+  settings.contextWindows = st.contextWindows;
   settings.autoRefresh = st.autoRefresh;
   st.budget = { enabled: !!inS.budget?.enabled, fiveHour: frac(inS.budget?.fiveHour, '5-hour limit'), weekly: frac(inS.budget?.weekly, 'Weekly limit') };
   fs.copyFileSync(CONFIG_PATH, CONFIG_PATH + '.bak');
@@ -449,6 +454,17 @@ let running = 0;
 
 // A pin on the card or in the config wins. Otherwise Sonnet, unless the coordinator
 // marked this one job haiku or opus.
+function cleanWindows(w) {
+  const o = {};
+  for (const m of Object.keys(CONTEXT_WINDOWS_DEFAULT)) o[m] = Number.isInteger(w?.[m]) && w[m] >= 10000 ? w[m] : CONTEXT_WINDOWS_DEFAULT[m];
+  return o;
+}
+// Window of the model the agent last ran on (family match), else its configured one. null if not in the map.
+function ctxWindowFor(a, lastModel) {
+  const name = String(lastModel || modelFor(a)).toLowerCase();
+  const fam = Object.keys(settings.contextWindows).find((m) => name.includes(m));
+  return fam ? settings.contextWindows[fam] : null;
+}
 function modelFor(a, hint) {
   if (state.models[a.id]) return state.models[a.id];
   if (a.model) return a.model;
@@ -493,6 +509,7 @@ function agentInfo(a) {
     model: state.models[a.id] || null,
     defaultModel: a.model || settings.model || null,
     lastModel: r.lastModel,
+    ctxWindow: ctxWindowFor(a, r.lastModel),
     effort: state.efforts[a.id] || null,
     defaultEffort: EFFORT_CHOICES.includes(a.effort) ? a.effort : settings.effort,
     lastEffort: r.lastEffort,
