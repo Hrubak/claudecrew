@@ -84,6 +84,7 @@ function loadConfig() {
     claudePath: process.env.CLAUDE_PATH || s.claudePath || null,
     budget: s.budget || {},
     refreshTokens: Number.isInteger(s.refreshTokens) && s.refreshTokens >= 10000 ? s.refreshTokens : REFRESH_TOKENS_DEFAULT,
+    autoRefresh: s.autoRefresh === true,
     cloudflare: loadCloudflare(raw.cloudflare),
   };
   const agents = raw.agents.map((a) => {
@@ -198,6 +199,7 @@ function editableConfig() {
       maxHops: s.maxHops ?? 6, maxConcurrent: s.maxConcurrent || 2, permissionMode: s.permissionMode || 'auto', model: s.model || null,
       effort: EFFORT_CHOICES.includes(s.effort) ? s.effort : 'low', judge: { enabled: s.judge?.enabled === true, model: MODEL_CHOICES.includes(s.judge?.model) ? s.judge.model : 'haiku' },
       refreshTokens: Number.isInteger(s.refreshTokens) && s.refreshTokens >= 10000 ? s.refreshTokens : REFRESH_TOKENS_DEFAULT,
+      autoRefresh: s.autoRefresh === true,
       claudePath: s.claudePath || '', machineName: s.machineName || '',
       budget: { enabled: s.budget?.enabled !== false, fiveHour: s.budget?.fiveHour ?? 0.85, weekly: s.budget?.weekly ?? 0.95 },
     },
@@ -255,6 +257,8 @@ function saveEditableConfig(input) {
   if (mn) st.machineName = mn; else delete st.machineName;
   st.refreshTokens = int(inS.refreshTokens ?? REFRESH_TOKENS_DEFAULT, 10000, 2000000, 'Refresh threshold (tokens)');
   settings.refreshTokens = st.refreshTokens;
+  st.autoRefresh = inS.autoRefresh === true;
+  settings.autoRefresh = st.autoRefresh;
   st.budget = { enabled: !!inS.budget?.enabled, fiveHour: frac(inS.budget?.fiveHour, '5-hour limit'), weekly: frac(inS.budget?.weekly, 'Weekly limit') };
   fs.copyFileSync(CONFIG_PATH, CONFIG_PATH + '.bak');
   const tmp = CONFIG_PATH + '.tmp';
@@ -496,9 +500,10 @@ function agentInfo(a) {
 }
 // "Refresh chat": ask the old session for a summary (one low-effort call), keep it on disk,
 // then drop the session so the next message starts fresh with that summary as context.
-async function refreshAgent(a) {
+async function refreshAgent(a, auto) {
   const r = runtime[a.id];
   const sid = state.sessions[a.id];
+  const ctxAt = state.ctx?.[a.id] || 0;
   if (!sid) return { ok: false, error: `${a.name} has no conversation to refresh.` };
   if (r.busy || r.refreshing) return { ok: false, error: `${a.name} is busy. Try again when it is idle.` };
   r.refreshing = true; r.busy = true; r.status = 'working'; r.activity = 'Writing summary…'; broadcastAgent(a);
@@ -537,9 +542,18 @@ ${out.text}
   if (state.ctx) delete state.ctx[a.id];
   r.needsYou = null;
   saveState();
-  post({ kind: 'system', text: `${a.name} refreshed its chat. The summary is saved at ${path.relative(ROOT, file)} and the new session starts with it.` });
+  if (auto) post({ kind: 'system', text: `${a.name} auto-refreshed at ${Math.round(ctxAt / 1000)}k, summary saved (${path.relative(ROOT, file)}).` });
+  else post({ kind: 'system', text: `${a.name} refreshed its chat. The summary is saved at ${path.relative(ROOT, file)} and the new session starts with it.` });
   done();
   return { ok: true, file: path.relative(ROOT, file) };
+}
+// Auto-refresh (opt-in): once the agent is idle and over the threshold, run the same refresh.
+function maybeAutoRefresh(a, tries = 0) {
+  if (!settings.autoRefresh) return;
+  const r = runtime[a.id];
+  if (!state.sessions[a.id] || (state.ctx?.[a.id] || 0) < settings.refreshTokens || r.refreshing) return;
+  if (r.busy || r.queue.length) { if (tries < 15) setTimeout(() => maybeAutoRefresh(a, tries + 1), 2000); return; }
+  refreshAgent(a, true).catch(() => {});
 }
 function broadcastAgent(a) { broadcast('agent', agentInfo(a)); }
 
@@ -947,6 +961,7 @@ ${state.carry[a.id]}]
       state.ctx = state.ctx || {};
       state.ctx[a.id] = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
       saveState();
+      setTimeout(() => maybeAutoRefresh(a), 1500);
     }
     for (const ev of resultEvents) usage.recordRun(a.id, ev);
     if (resultEvents.length) broadcastUsage();

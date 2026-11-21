@@ -1742,6 +1742,7 @@
         <label class="chk"><input type="checkbox" id="sBud" ${b.enabled ? 'checked' : ''}> Hold new work near plan limits</label>
         <label>5-hour limit (%)<input type="number" id="sB5" value="${Math.round(b.fiveHour * 100)}" min="1" max="100"></label>
         <label>Refresh banner at (tokens)<input type="number" id="sRef" value="${esc(s.refreshTokens)}" min="10000" max="2000000" step="10000"></label>
+        <label class="chk"><input type="checkbox" id="sAutoRef" ${s.autoRefresh ? 'checked' : ''}> Auto-refresh when idle and over that size</label>
         <label>Weekly limit (%)<input type="number" id="sBW" value="${Math.round(b.weekly * 100)}" min="1" max="100"></label>
       </div></div>
       <div class="section"><h5>Crew members</h5><div id="sAgents" style="display:grid;gap:10px">${cfg.agents.map(agentCard).join('')}</div>
@@ -1769,7 +1770,7 @@
       const agentsOut = [...$('#sAgents').children].map((c) => Object.fromEntries([...c.querySelectorAll('[data-k]')].map((el) => [el.dataset.k, el.value])));
       const body = { settings: {
         userName: $('#sUser').value, defaultAgent: $('#sDef').value, machineName: $('#sMach').value, port: num('#sPort'), allowLan: $('#sLan').checked,
-        model: $('#sModel').value || null, permissionMode: $('#sPerm').value, maxConcurrent: num('#sConc'), maxHops: num('#sHops'), claudePath: $('#sClaude').value, refreshTokens: num('#sRef'),
+        model: $('#sModel').value || null, permissionMode: $('#sPerm').value, maxConcurrent: num('#sConc'), maxHops: num('#sHops'), claudePath: $('#sClaude').value, refreshTokens: num('#sRef'), autoRefresh: $('#sAutoRef').checked,
         effort: $('#sEffort').value, judge: { enabled: $('#sJudge').checked, model: $('#sJudgeModel').value },
         budget: { enabled: $('#sBud').checked, fiveHour: num('#sB5') / 100, weekly: num('#sBW') / 100 },
       }, agents: agentsOut };
