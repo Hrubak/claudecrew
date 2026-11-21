@@ -10,6 +10,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn, execFile, execFileSync } = require('child_process');
 const { createUsage } = require('./lib/usage');
+const { createJudge } = require('./lib/judge');
 const changes = require('./lib/changes');
 const { createScheduler } = require('./lib/scheduler');
 const { createPush } = require('./lib/webpush');
@@ -29,9 +30,11 @@ const STATE_PATH = path.join(DATA_DIR, 'state.json');
 const LOG_PATH = path.join(DATA_DIR, 'messages.jsonl');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const HISTORY_LIMIT = 400;
-// Quiet automatic fresh conversation when context gets heavy or a session runs long.
-const AUTO_RESET_TOKENS = 110000, AUTO_RESET_TURNS = 25;
+const SUMMARY_DIR = path.join(DATA_DIR, 'summaries');
+const REFRESH_TOKENS_DEFAULT = 110000;
 const ID_RE = /^[a-z][a-z0-9-]*$/;
+const MODEL_CHOICES = ['opus', 'sonnet', 'haiku'];
+const EFFORT_CHOICES = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 fs.mkdirSync(PROMPT_DIR, { recursive: true });
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -76,8 +79,11 @@ function loadConfig() {
     maxConcurrent: Math.max(1, s.maxConcurrent || 2),
     permissionMode: s.permissionMode || 'auto',
     model: s.model || null,
+    effort: EFFORT_CHOICES.includes(s.effort) ? s.effort : 'low',
+    judge: { enabled: s.judge?.enabled === true, model: MODEL_CHOICES.includes(s.judge?.model) ? s.judge.model : 'haiku' },
     claudePath: process.env.CLAUDE_PATH || s.claudePath || null,
     budget: s.budget || {},
+    refreshTokens: Number.isInteger(s.refreshTokens) && s.refreshTokens >= 10000 ? s.refreshTokens : REFRESH_TOKENS_DEFAULT,
     cloudflare: loadCloudflare(raw.cloudflare),
   };
   const agents = raw.agents.map((a) => {
@@ -117,9 +123,10 @@ for (const a of agents) {
 function readJson(p, fallback) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; }
 }
-// sessions: agent conversation ids. models: per-agent model picked in the UI.
+// sessions: agent conversation ids. models/efforts: per-agent picks made in the UI.
 // flags: per-message state that changes after posting (approved, undone).
-const state = Object.assign({ sessions: {}, models: {}, flags: {} }, readJson(STATE_PATH, {}));
+const state = Object.assign({ sessions: {}, models: {}, efforts: {}, flags: {} }, readJson(STATE_PATH, {}));
+if (!state.efforts) state.efforts = {};
 if (!state.accessKey) state.accessKey = crypto.randomBytes(12).toString('base64url');
 function saveState() { fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2)); }
 
@@ -179,6 +186,85 @@ function savePresenceHub(hub) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2));
   rawCfg.presenceHub = hub || undefined;
 }
+const PERMISSION_MODES = ['auto', 'default', 'acceptEdits', 'plan', 'bypassPermissions'];
+const AGENT_KEYS = ['id', 'name', 'emoji', 'avatar', 'cwd', 'description', 'instructions', 'model', 'permissionMode'];
+// What the Settings dialog may see and change. Cloudflare and machine-pairing settings stay in the file.
+function editableConfig() {
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+  const s = raw.settings || {};
+  return {
+    settings: {
+      userName: s.userName || '', defaultAgent: s.defaultAgent || raw.agents[0].id, port: s.port || 7777, allowLan: !!s.allowLan,
+      maxHops: s.maxHops ?? 6, maxConcurrent: s.maxConcurrent || 2, permissionMode: s.permissionMode || 'auto', model: s.model || null,
+      effort: EFFORT_CHOICES.includes(s.effort) ? s.effort : 'low', judge: { enabled: s.judge?.enabled === true, model: MODEL_CHOICES.includes(s.judge?.model) ? s.judge.model : 'haiku' },
+      refreshTokens: Number.isInteger(s.refreshTokens) && s.refreshTokens >= 10000 ? s.refreshTokens : REFRESH_TOKENS_DEFAULT,
+      claudePath: s.claudePath || '', machineName: s.machineName || '',
+      budget: { enabled: s.budget?.enabled !== false, fiveHour: s.budget?.fiveHour ?? 0.85, weekly: s.budget?.weekly ?? 0.95 },
+    },
+    agents: raw.agents.map((a) => Object.fromEntries(AGENT_KEYS.map((k) => [k, a[k] ?? '']))),
+  };
+}
+function saveEditableConfig(input) {
+  const inS = input?.settings || {}, inA = input?.agents;
+  const int = (v, lo, hi, label) => { const n = Number(v); if (!Number.isInteger(n) || n < lo || n > hi) throw new Error(`${label} must be a whole number from ${lo} to ${hi}`); return n; };
+  const frac = (v, label) => { const n = Number(v); if (!(n > 0 && n <= 1)) throw new Error(`${label} must be between 1% and 100%`); return Math.round(n * 100) / 100; };
+  if (!Array.isArray(inA) || !inA.length) throw new Error('Keep at least one agent');
+  const seen = new Set();
+  const agentsOut = inA.map((a) => {
+    const id = String(a.id || '').trim().toLowerCase();
+    if (!ID_RE.test(id) || id === 'all') throw new Error(`Bad agent id "${a.id}" (lowercase letters, digits, dashes, starting with a letter)`);
+    if (seen.has(id)) throw new Error(`Two agents share the id "${id}"`);
+    seen.add(id);
+    if (!String(a.cwd || '').trim()) throw new Error(`@${id} needs a folder`);
+    if (a.model && !MODEL_CHOICES.includes(a.model)) throw new Error(`@${id}: unknown model`);
+    if (a.permissionMode && !PERMISSION_MODES.includes(a.permissionMode)) throw new Error(`@${id}: unknown permission mode`);
+    return { id, name: String(a.name || '').trim() || id };
+  });
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+  const oldById = Object.fromEntries(raw.agents.map((a) => [String(a.id).toLowerCase(), a]));
+  raw.agents = inA.map((a, i) => {
+    const old = oldById[agentsOut[i].id] || {};
+    const next = { ...old, id: agentsOut[i].id, name: agentsOut[i].name };
+    for (const k of ['emoji', 'avatar', 'description', 'instructions', 'model', 'permissionMode']) {
+      const v = typeof a[k] === 'string' ? a[k].trim() : '';
+      if (v) next[k] = v; else delete next[k];
+    }
+    next.cwd = String(a.cwd).trim().replaceAll('\\', '/');
+    return next;
+  });
+  const defaultAgent = String(inS.defaultAgent || '').toLowerCase();
+  if (!seen.has(defaultAgent)) throw new Error('The default agent must be one of the agents');
+  if (inS.permissionMode && !PERMISSION_MODES.includes(inS.permissionMode)) throw new Error('Unknown permission mode');
+  if (inS.model && !MODEL_CHOICES.includes(inS.model)) throw new Error('Unknown model');
+  const st = raw.settings = raw.settings || {};
+  st.userName = String(inS.userName || '').trim() || 'You';
+  st.defaultAgent = defaultAgent;
+  st.port = int(inS.port, 1024, 65535, 'Port');
+  st.allowLan = !!inS.allowLan;
+  st.maxHops = int(inS.maxHops, 0, 20, 'Hand-off depth');
+  st.maxConcurrent = int(inS.maxConcurrent, 1, 20, 'Agents at once');
+  st.permissionMode = inS.permissionMode || 'auto';
+  st.model = inS.model || null;
+  if (inS.effort && !EFFORT_CHOICES.includes(inS.effort)) throw new Error('Unknown effort');
+  st.effort = inS.effort || 'low';
+  if (inS.judge?.model && !MODEL_CHOICES.includes(inS.judge.model)) throw new Error('Unknown judge model');
+  st.judge = { enabled: inS.judge?.enabled === true, model: inS.judge?.model || 'haiku' };
+  const cp = String(inS.claudePath || '').trim().replaceAll('\\', '/');
+  if (cp) st.claudePath = cp; else delete st.claudePath;
+  const mn = String(inS.machineName || '').trim();
+  if (mn) st.machineName = mn; else delete st.machineName;
+  st.refreshTokens = int(inS.refreshTokens ?? REFRESH_TOKENS_DEFAULT, 10000, 2000000, 'Refresh threshold (tokens)');
+  settings.refreshTokens = st.refreshTokens;
+  st.budget = { enabled: !!inS.budget?.enabled, fiveHour: frac(inS.budget?.fiveHour, '5-hour limit'), weekly: frac(inS.budget?.weekly, 'Weekly limit') };
+  fs.copyFileSync(CONFIG_PATH, CONFIG_PATH + '.bak');
+  const tmp = CONFIG_PATH + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(raw, null, 2));
+  fs.renameSync(tmp, CONFIG_PATH);
+  // Routing settings take effect immediately; the rest still needs a restart.
+  settings.effort = st.effort;
+  settings.judge = { ...st.judge };
+}
+const judge = createJudge({ getSettings: () => settings, launch: (args, opts) => launchClaude(args, opts), env: () => childEnv(), cwd: ROOT });
 const busyCount = () => agents.filter((a) => runtime[a.id].status === 'working').length;
 const scheduler = createScheduler({
   file: path.join(DATA_DIR, 'schedules.json'),
@@ -352,12 +438,11 @@ const runtime = {};
 for (const a of agents) {
   runtime[a.id] = {
     status: 'idle', activity: '', queue: [], proc: null, busy: false, stopped: false,
-    resetPending: false, draft: '', needsYou: null, lastModel: null,
+    resetPending: false, draft: '', needsYou: null, lastModel: null, lastEffort: null,
   };
 }
 let running = 0;
 
-const MODEL_CHOICES = ['opus', 'sonnet', 'haiku'];
 // A pin on the card or in the config wins. Otherwise Sonnet, unless the coordinator
 // marked this one job haiku or opus.
 function modelFor(a, hint) {
@@ -367,8 +452,9 @@ function modelFor(a, hint) {
   if (settings.model) return settings.model;
   return 'sonnet';
 }
-function effortFor(model) {
-  return model === 'haiku' ? 'low' : 'medium';
+// Low unless you pick heavier: per-agent pick, then the agent's config, then the global default.
+function effortFor(a) {
+  return state.efforts[a.id] || (EFFORT_CHOICES.includes(a.effort) ? a.effort : null) || settings.effort || 'low';
 }
 
 // Forget an agent's conversation so its next message starts fresh.
@@ -397,11 +483,63 @@ function agentInfo(a) {
     description: a.description || '', cwd: a.cwd, missing: !!a.missing,
     status: r.status, activity: r.activity, queued: r.queue.length,
     hasSession: !!state.sessions[a.id], resetPending: r.resetPending,
+    contextTokens: state.sessions[a.id] ? state.ctx?.[a.id] || 0 : 0, refreshAt: settings.refreshTokens, refreshing: !!r.refreshing,
+    refreshSuggested: !!state.sessions[a.id] && (state.ctx?.[a.id] || 0) >= settings.refreshTokens,
     needsYou: r.needsYou,
     model: state.models[a.id] || null,
     defaultModel: a.model || settings.model || null,
     lastModel: r.lastModel,
+    effort: state.efforts[a.id] || null,
+    defaultEffort: EFFORT_CHOICES.includes(a.effort) ? a.effort : settings.effort,
+    lastEffort: r.lastEffort,
   };
+}
+// "Refresh chat": ask the old session for a summary (one low-effort call), keep it on disk,
+// then drop the session so the next message starts fresh with that summary as context.
+async function refreshAgent(a) {
+  const r = runtime[a.id];
+  const sid = state.sessions[a.id];
+  if (!sid) return { ok: false, error: `${a.name} has no conversation to refresh.` };
+  if (r.busy || r.refreshing) return { ok: false, error: `${a.name} is busy. Try again when it is idle.` };
+  r.refreshing = true; r.busy = true; r.status = 'working'; r.activity = 'Writing summary…'; broadcastAgent(a);
+  const done = () => { r.refreshing = false; r.busy = false; r.status = r.queue.length ? 'queued' : 'idle'; r.activity = ''; broadcastAgent(a); pump(); };
+  const prompt = 'Write a handoff summary of this conversation so a fresh session can continue it. Cover: the goal, decisions made, current state, files changed, open tasks and next steps. Plain text, under 600 words. Do not use tools.';
+  const out = await new Promise((resolve) => {
+    let proc, o = '', e = '', fin = false;
+    const end = (v) => { if (fin) return; fin = true; clearTimeout(t); resolve(v); };
+    try {
+      proc = launchClaude(['-p', '--output-format', 'json', '--resume', sid, '--model', modelFor(a), '--effort', 'low', '--disallowedTools', 'Agent,Task,Bash,Edit,Write,Read,Grep,Glob', '--permission-prompts', 'none'], { cwd: a.cwd, env: childEnv(), windowsHide: true });
+    } catch (err) { return resolve({ error: err.message }); }
+    const t = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } end({ error: 'Timed out writing the summary.' }); }, 180000);
+    proc.stdout.setEncoding('utf8'); proc.stderr.setEncoding('utf8');
+    proc.stdout.on('data', (d) => { o += d; }); proc.stderr.on('data', (d) => { e += d; });
+    proc.on('error', (err) => end({ error: err.message }));
+    proc.on('close', (code) => {
+      try { const j = JSON.parse(o); end(j.is_error || !String(j.result || '').trim() ? { error: String(j.result || 'Empty summary.') } : { text: String(j.result).trim(), costUSD: j.total_cost_usd ?? null }); }
+      catch { end({ error: e.trim() || `Claude exited with code ${code}.` }); }
+    });
+    proc.stdin.on('error', () => {}); proc.stdin.end(prompt);
+  });
+  if (out.error) { done(); return { ok: false, error: `Couldn't write the summary, so nothing was changed: ${out.error}` }; }
+  fs.mkdirSync(SUMMARY_DIR, { recursive: true });
+  const file = path.join(SUMMARY_DIR, `${a.id}-${new Date().toISOString().replace(/[:.]/g, '-')}-${sid.slice(0, 8)}.md`);
+  fs.writeFileSync(file, `# ${a.name} summary
+
+Session: ${sid}
+Written: ${new Date().toISOString()}
+Context at refresh: ${state.ctx?.[a.id] || 'unknown'} tokens
+
+${out.text}
+`);
+  state.handoff = state.handoff || {};
+  state.handoff[a.id] = { text: out.text, file, session: sid, at: Date.now() };
+  delete state.sessions[a.id];
+  if (state.ctx) delete state.ctx[a.id];
+  r.needsYou = null;
+  saveState();
+  post({ kind: 'system', text: `${a.name} refreshed its chat. The summary is saved at ${path.relative(ROOT, file)} and the new session starts with it.` });
+  done();
+  return { ok: true, file: path.relative(ROOT, file) };
 }
 function broadcastAgent(a) { broadcast('agent', agentInfo(a)); }
 
@@ -565,6 +703,8 @@ function launch(a, item, isRetry, snapP) {
   const snapReady = Promise.resolve(snapP).then((s) => { snap = s; return s; });
   const sessionId = state.sessions[a.id];
   const model = modelFor(a, item.model);
+  const effort = effortFor(a);
+  r.lastEffort = effort;
   const args = [
     '-p',
     '--input-format', 'stream-json',
@@ -579,7 +719,7 @@ function launch(a, item, isRetry, snapP) {
     '--append-system-prompt-file', promptFiles[a.id],
     '--permission-mode', a.permissionMode || settings.permissionMode,
     '--model', model,
-    '--effort', effortFor(model),
+    '--effort', effort,
   ];
   if (sessionId) args.push('--resume', sessionId);
   // Subagents each open another full context. The coordinator delegates instead.
@@ -714,7 +854,13 @@ function launch(a, item, isRetry, snapP) {
   proc.stderr.setEncoding('utf8');
   proc.stderr.on('data', (c) => { stderr = (stderr + c).slice(-4000); });
   let first = formatPrompt(item);
-  if (!sessionId && state.carry?.[a.id]) {
+  if (!sessionId && state.handoff?.[a.id]) {
+    first = `[Fresh conversation. The previous one was refreshed because its context got large. This is its summary; rely on CLAUDE.md, memory and files for anything else:
+${state.handoff[a.id].text}]
+
+` + first;
+    delete state.handoff[a.id]; saveState();
+  } else if (!sessionId && state.carry?.[a.id]) {
     first = `[Fresh conversation. Your previous one ended with this reply, for continuity; rely on CLAUDE.md, memory and files for anything else:
 ${state.carry[a.id]}]
 
@@ -750,17 +896,10 @@ ${state.carry[a.id]}]
       isError: !!raw.is_error || (raw.subtype && raw.subtype !== 'success'),
     } : null;
     if (!r.stopped && result && !result.isError && !r.resetPending) {
+      // Only measured here. The "Refresh chat" banner offers a refresh; nothing happens until it is clicked.
       const u = raw?.usage || {};
-      const ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-      state.turns = state.turns || {};
-      state.turns[a.id] = (state.turns[a.id] || 0) + 1;
-      if (ctx > AUTO_RESET_TOKENS || state.turns[a.id] >= AUTO_RESET_TURNS) {
-        state.carry = state.carry || {};
-        state.carry[a.id] = String(result.text || '').slice(0, 1500);
-        state.turns[a.id] = 0;
-        r.resetPending = true;
-        post({ kind: 'system', text: `${a.name} auto-refreshed its conversation to keep things fast (it keeps its notes and CLAUDE.md).` });
-      }
+      state.ctx = state.ctx || {};
+      state.ctx[a.id] = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
       saveState();
     }
     for (const ev of resultEvents) usage.recordRun(a.id, ev);
@@ -807,6 +946,7 @@ ${state.carry[a.id]}]
         denials: denials.length ? denials : undefined,
         needs: needs || undefined,
         model: r.lastModel || undefined,
+        effort,
         stats: resultEvents.length ? {
           ms: resultEvents.reduce((s, e) => s + (e.duration_ms || 0), 0),
           costUSD: resultEvents.reduce((s, e) => s + (e.total_cost_usd || 0), 0),
@@ -1145,11 +1285,16 @@ function makeHandler(entrance) {
           drafts: Object.fromEntries(agents.filter((a) => runtime[a.id].draft).map((a) => [a.id, runtime[a.id].draft])),
           usage: usage.summary(agents.map((a) => a.id)),
           schedules: scheduler.list(),
-          modelChoices: MODEL_CHOICES,
+          modelChoices: MODEL_CHOICES, effortChoices: EFFORT_CHOICES,
           pushKey: push.publicKey,
           signedInAs: identity?.email || null,
           signOutUrl: viaCloudflare ? '/cdn-cgi/access/logout' : null,
         });
+      }
+      // Settings editor: this PC only, never over the tunnel or from other devices.
+      if (req.method === 'GET' && url.pathname === '/api/config') {
+        if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Settings can only be changed from the PC Crew runs on.' });
+        return send(res, 200, { ...editableConfig(), supervised: process.env.CREW_SUPERVISED === '1', modelChoices: MODEL_CHOICES, effortChoices: EFFORT_CHOICES, permissionModes: PERMISSION_MODES });
       }
       if (req.method === 'GET' && url.pathname === '/api/machines/link') return send(res, 200, { url: rawCfg.presenceHub?.url || '' });
       if (req.method === 'GET' && url.pathname === '/api/machines') {
@@ -1166,7 +1311,7 @@ function makeHandler(entrance) {
         try { return send(res, 200, JSON.parse(fs.readFileSync(NOTES_PATH, 'utf8'))); } catch { return send(res, 200, {}); }
       }
       if (req.method === 'GET' && url.pathname === '/api/usage') {
-        return send(res, 200, usage.summary(agents.map((a) => a.id)));
+        return send(res, 200, { ...usage.summary(agents.map((a) => a.id)), judgeEnabled: settings.judge?.enabled === true });
       }
       let mm;
       if (req.method === 'GET' && (mm = url.pathname.match(/^\/api\/changes\/([\w-]+)\/diff$/))) {
@@ -1246,6 +1391,15 @@ function makeHandler(entrance) {
           }
           return;
         }
+        if (url.pathname === '/api/config') {
+          if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Settings can only be changed from the PC Crew runs on.' });
+          try {
+            saveEditableConfig(body);
+          } catch (err) {
+            return send(res, 400, { error: err.message });
+          }
+          return send(res, 200, { ok: true, restartNeeded: true });
+        }
         // Used by the tray icon. This PC only: never over the tunnel or from other devices.
         if (url.pathname === '/api/restart' && !viaCloudflare && isLocal(req)) {
           send(res, 200, { ok: true });
@@ -1256,11 +1410,17 @@ function makeHandler(entrance) {
         }
 
         // ---- agents: stop, reset, model
-        if ((mm = url.pathname.match(/^\/api\/agents\/([a-z0-9-]+)\/(stop|reset|model)$/)) && byId[mm[1]]) {
+        if ((mm = url.pathname.match(/^\/api\/agents\/([a-z0-9-]+)\/(stop|reset|model|effort)$/)) && byId[mm[1]]) {
           const a = byId[mm[1]];
           if (mm[2] === 'stop') stopAgent(a.id);
           else if (mm[2] === 'reset') resetAgent(a);
-          else {
+          else if (mm[2] === 'effort') {
+            const choice = body.effort || null;
+            if (choice && !EFFORT_CHOICES.includes(choice)) return send(res, 400, { error: 'unknown effort' });
+            if (choice) state.efforts[a.id] = choice; else delete state.efforts[a.id];
+            saveState();
+            broadcastAgent(a);
+          } else {
             const choice = body.model || null;
             if (choice && !MODEL_CHOICES.includes(choice)) return send(res, 400, { error: 'unknown model' });
             if (choice) state.models[a.id] = choice; else delete state.models[a.id];
@@ -1268,6 +1428,13 @@ function makeHandler(entrance) {
             broadcastAgent(a);
           }
           return send(res, 200, { ok: true, pending: runtime[a.id].resetPending });
+        }
+
+        if (url.pathname === '/api/refresh') {
+          const a = byId[String(body.agent || '').toLowerCase()];
+          if (!a) return send(res, 404, { error: 'Unknown agent.' });
+          const out = await refreshAgent(a);
+          return send(res, out.ok ? 200 : 409, out);
         }
 
         // ---- approve a permission an agent was refused, and let it continue
@@ -1298,6 +1465,12 @@ function makeHandler(entrance) {
           const skipped = result.skipped.length ? ` Skipped ${result.skipped.length}: ${result.skipped.map((s) => `${s.path} (${s.why})`).join('; ')}.` : '';
           post({ kind: 'system', text: `↩ Undid ${result.done.length} file change(s) from ${a?.name || 'that'} turn.${skipped}` });
           return send(res, 200, { ok: true, ...result });
+        }
+
+        // ---- judge: manual only, refuses unless switched on in Settings
+        if (url.pathname === '/api/judge') {
+          const r = await judge.ask(String(body.prompt || ''));
+          return send(res, r.ok ? 200 : (r.disabled ? 403 : 500), r);
         }
 
         // ---- usage budget guard
@@ -1353,6 +1526,10 @@ function makeHandler(entrance) {
         }
 
         // ---- phone notifications
+        // Machine pairing is managed from Settings: this PC only, never over the tunnel or from other devices.
+        if (/^\/api\/machines\/(pair|connect|disconnect|remove)$/.test(url.pathname) && (viaCloudflare || !isLocal(req))) {
+          return send(res, 403, { error: 'Machines can only be changed from the PC Crew runs on.' });
+        }
         if (url.pathname === '/api/machines/pair') {
           const p = presence.newPairCode();
           // Address another PC should use to reach this hub: the Cloudflare name if set up, else this PC on the LAN.

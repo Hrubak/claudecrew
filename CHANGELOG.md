@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+- Settings dialog (header 🛠) to edit general options, usage guard and crew members without touching crew.config.json. Local-only; keeps a crew.config.json.bak.
+- Restart button (header ↻) that waits for Crew to come back and reloads the page.
+- Effort picker (low to max) per agent, default low for every model, plus a Routing section in Settings. The agent dialog shows "Last request: model · effort".
+- Shared judge (`lib/judge.js`, `POST /api/judge`), OFF by default and only manual; nothing calls it automatically.
+
 ## 0.6.0
 - Sidebar layout on desktop and a slide-out crew drawer on phones, with unread badges and a compact header menu.
 - Integrations panel: linked MCP servers, services and secret-looking environment variable names (values are never read), and which agents can reach them.
