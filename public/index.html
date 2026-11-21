@@ -1583,11 +1583,11 @@
       const label = { tool: 'Tool', result: 'Result', thinking: 'Thinking', text: 'Text', handoff: 'Hand-off', retry: 'Retry', error: 'Error', steer: 'Follow-up' }[t.kind] || t.kind;
       const what = t.kind === 'tool' || t.kind === 'result' ? ` · ${esc(t.name)}` : '';
       el.innerHTML = `<div class="th"><span>#${t.step}</span><span>${clock(t.ts)}</span><b>${esc(nameOf(t.agent))} · ${label}${what}</b>${t.kind === 'tool' ? `<span>${esc(t.summary || '')}</span>` : ''}</div><div class="tb"></div>`;
-      if (t.kind === 'result') {
+      if (t.kind === 'result' || t.kind === 'thinking') {
         const d = document.createElement('details');
-        d.innerHTML = `<summary>${t.text.length.toLocaleString()} characters${t.isError ? ' (error)' : ''}</summary><div class="rb"></div>`;
+        d.innerHTML = '<summary></summary><div class="rb"></div>';
         el.querySelector('.tb').appendChild(d);
-        x = { t, el, body: d.querySelector('.rb') };
+        x = { t, el, body: d.querySelector('.rb'), sum: d.querySelector('summary') };
       } else x = { t, el, body: el.querySelector('.tb') };
       x.set = false;
       traces.set(t.id, x);
@@ -1597,6 +1597,12 @@
     }
     x.t = t;
     const text = t.kind === 'tool' ? t.input : t.text;
+    if (x.sum) {
+      const n = (t.text || '').length;
+      x.sum.textContent = t.kind === 'thinking'
+        ? (n ? `${n.toLocaleString()} characters${t.live ? ' (thinking…)' : ''}` : (t.live ? 'thinking…' : '(no thinking text returned)'))
+        : `${n.toLocaleString()} characters${t.isError ? ' (error)' : ''}`;
+    }
     if (text !== x.last) { x.last = text; fillBody(x.body, text || ''); }
     x.el.hidden = !traceShown(t);
     if (nearBottom && !x.el.hidden) scroller.scrollTop = scroller.scrollHeight;
