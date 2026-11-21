@@ -196,7 +196,8 @@
   .agent .cpill { flex: none; margin-left: 0; white-space: nowrap; }
   .agent.working .cpill { display: none; }
   #agents { container-type: inline-size; }
-  @container (max-width: 300px) { .agent .cpill .cw { display: none; } }
+  .agent .mdl .ms { display: none; }
+  @container (max-width: 300px) { .agent .cpill .cw { display: none; } .agent .mdl .mf { display: none; } .agent .mdl .ms { display: inline; } }
   .agent .tools button {
     background: none; border: 0; padding: 2px 5px; border-radius: 6px; color: var(--muted); font-size: 13px;
   }
@@ -949,7 +950,9 @@
     el.querySelector('.emo').innerHTML = avatar(a.id);
     el.querySelector('.n').textContent = a.name;
     const mdl = a.model ? a.model[0].toUpperCase() + a.model.slice(1) : prettyModel(a.lastModel);
-    el.querySelector('.mdl').textContent = mdl;
+    const mEl = el.querySelector('.mdl');
+    mEl.replaceChildren(Object.assign(document.createElement('span'), { className: 'mf', textContent: mdl }), Object.assign(document.createElement('span'), { className: 'ms', textContent: mdl ? mdl[0] + (mdl.match(/[0-9][0-9.]*/) || [''])[0] : '' }));
+    mEl.title = mdl;
     el.querySelector('.mdl').style.display = mdl ? '' : 'none';
     el.querySelector('[data-act=stop]').style.display = a.status === 'idle' ? 'none' : '';
     const act = a.missing ? 'Folder not found'
