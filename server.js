@@ -1480,7 +1480,7 @@ function makeHandler(entrance) {
         }
         if (url.pathname === '/api/prefs') {
           const k = String(body.key || '');
-          if (!/^crew-[w-]{1,40}$/.test(k) || typeof body.value !== 'string' || body.value.length > 20000) return send(res, 400, { error: 'bad pref' });
+          if (!/^crew-[\w-]{1,40}$/.test(k) || typeof body.value !== 'string' || body.value.length > 20000) return send(res, 400, { error: 'bad pref' });
           let all = {}; try { all = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf8')); } catch {}
           all[k] = body.value;
           fs.writeFileSync(PREFS_PATH, JSON.stringify(all, null, 2));
