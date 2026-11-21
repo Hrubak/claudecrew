@@ -9,3 +9,6 @@ env_vars.txt
 
 install-log.txt
 runtime/
+.env.*
+secrets/
+install-manifest.json

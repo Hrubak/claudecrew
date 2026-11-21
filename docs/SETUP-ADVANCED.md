@@ -4,7 +4,7 @@
 
 | Your situation | Run this | Where |
 | --- | --- | --- |
-| **Windows, first time** (this is the normal case) | `irm https://raw.githubusercontent.com/hast3/claudecrew/main/install.ps1 \| iex` | PowerShell, any folder |
+| **Windows, first time** (this is the normal case) | Double-click `setup.cmd` in a git clone | Browser wizard, any folder |
 | **Adding another PC to a Crew you already run** | Hub's **Machines → Get pairing code**, then paste the one line it shows | PowerShell on the new PC |
 | **Updating** | Click **⬆ Update available** in Crew. Or run the first-time command again: it updates and never touches your settings | Crew page, or PowerShell |
 | **Mac, Linux, or you prefer to do it by hand** | [Manual install](#manual-install-mac-linux-or-by-hand) below | Terminal |

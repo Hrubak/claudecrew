@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Setup wizard (`setup.cmd`) replaces `INSTALL.bat` / `install.ps1`. Installs are always a git clone (never a ZIP). Default source is hast3/claudecrew `main`; Hrubak/claudecrew `crew-mods` is a preset. Optional autostart is off by default.
+- Folder picker (Browse…) and path checks: block Downloads, temp, and ZIP extracts; warn if the folder is not empty; confirm it is writable.
+- Settings > General: Switch source (never discards uncommitted work) and an Uninstall danger zone. `uninstall.cmd` backs up user data by default to a zip outside the install folder.
+- `.gitignore` now also ignores `.env.*`, `secrets/`, and `install-manifest.json`.
+
 - Settings dialog (header 🛠) to edit general options, usage guard and crew members without touching crew.config.json. Local-only; keeps a crew.config.json.bak.
 - Restart button (header ↻) that waits for Crew to come back and reloads the page.
 - Effort picker (low to max) per agent, default low for every model, plus a Routing section in Settings. The agent dialog shows "Last request: model · effort".

@@ -17,10 +17,13 @@ const { createPush } = require('./lib/webpush');
 const { createUpdater } = require('./lib/update');
 const { createIntegrations } = require('./lib/integrations');
 const { createPresence, startClient, pairOnce } = require('./lib/presence');
+const setup = require('./lib/setup');
+const uninstall = require('./lib/uninstall');
 
 const ROOT = __dirname;
 // Paths can be moved with environment variables; relative values resolve against this folder.
 const DATA_DIR = path.resolve(ROOT, process.env.CREW_DATA_DIR || 'data');
+const PID_PATH = path.join(DATA_DIR, 'crew.pid');
 const PROMPT_DIR = path.join(DATA_DIR, 'prompts');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const CONFIG_PATH = path.resolve(ROOT, process.env.CREW_CONFIG || 'crew.config.json');
@@ -1379,6 +1382,15 @@ function makeHandler(entrance) {
         return send(res, 200, { ...editableConfig(), supervised: process.env.CREW_SUPERVISED === '1', modelChoices: MODEL_CHOICES, effortChoices: EFFORT_CHOICES, permissionModes: PERMISSION_MODES });
       }
       if (req.method === 'GET' && url.pathname === '/api/machines/link') return send(res, 200, { url: rawCfg.presenceHub?.url || '' });
+      if (req.method === 'GET' && url.pathname === '/api/source') {
+        if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Source can only be viewed from the PC Crew runs on.' });
+        return send(res, 200, await setup.sourceStatus(ROOT));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/uninstall/preview') {
+        if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Uninstall can only be started from the PC Crew runs on.' });
+        try { return send(res, 200, uninstall.previewUninstall(ROOT, { dataMode: url.searchParams.get('dataMode') || 'backup' })); }
+        catch (err) { return send(res, 400, { error: err.message }); }
+      }
       if (req.method === 'GET' && url.pathname === '/api/machines') {
         presence.setActivity(busyCount() ? `${busyCount()} agent${busyCount() > 1 ? 's' : ''} working` : 'idle');
         return send(res, 200, presence.list());
@@ -1488,6 +1500,45 @@ function makeHandler(entrance) {
           console.log(`Restart requested at ${new Date().toLocaleString()}`);
           for (const a of agents) stopAgent(a.id);
           setTimeout(() => process.exit(0), 1500); // run-crew.cmd starts it again
+          return;
+        }
+        if (url.pathname === '/api/source' && !viaCloudflare && isLocal(req)) {
+          try {
+            const next = await setup.switchSource(ROOT, { url: body.url, branch: body.branch });
+            send(res, 200, { ok: true, ...next, restartNeeded: true });
+          } catch (err) {
+            return send(res, 409, { ok: false, error: err.message, dirtyFiles: err.dirtyFiles || [] });
+          }
+          return;
+        }
+        if (url.pathname === '/api/uninstall' && !viaCloudflare && isLocal(req)) {
+          try {
+            const dataMode = body.dataMode || 'backup';
+            const preview = uninstall.previewUninstall(ROOT, { dataMode });
+            if (body.dryRun) {
+              const result = await uninstall.runUninstall({ installDir: ROOT, dataMode, dryRun: true, backupPath: body.backupPath || preview.backupPath });
+              return send(res, 200, result);
+            }
+            // Backup first while this process is still running, then hand off deletion
+            // to a detached setup-wizard so we don't delete our own files mid-request.
+            let backup = null;
+            if (dataMode === 'backup' && preview.userData.length) {
+              backup = await uninstall.createBackupZip(ROOT, body.backupPath || preview.backupPath, preview.userData);
+            }
+            const planPath = path.join(DATA_DIR, 'uninstall-plan.json');
+            fs.writeFileSync(planPath, JSON.stringify({
+              installDir: ROOT, dataMode, backupPath: backup && backup.path, waitForPid: process.pid, createdAt: new Date().toISOString(),
+            }, null, 2));
+            const child = spawn(process.execPath, [path.join(ROOT, 'setup-wizard.js'), '--exec-plan', '--plan', planPath, '--dir', ROOT], {
+              detached: true, stdio: 'ignore', cwd: ROOT,
+            });
+            child.unref();
+            send(res, 200, { ok: true, handedOff: true, backup, planPath, preview });
+            for (const a of agents) stopAgent(a.id);
+            setTimeout(() => process.exit(0), 1500);
+          } catch (err) {
+            return send(res, 400, { ok: false, error: err.message });
+          }
           return;
         }
 
@@ -1616,7 +1667,7 @@ function makeHandler(entrance) {
           const p = presence.newPairCode();
           // Address another PC should use to reach this hub: the Cloudflare name if set up, else this PC on the LAN.
           const hub = cf ? cf.hostname : settings.allowLan && lanAddresses()[0] ? lanAddresses()[0] + ':' + settings.port : '';
-          const line = hub ? 'powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hast3/claudecrew/main/install.ps1))) -Hub ' + hub + ' -Code ' + p.code + '"' : '';
+          const line = hub ? 'Install Claude Crew on the new PC (double-click setup.cmd). Then in Settings > Machines enter:\nHub: ' + hub + '\nCode: ' + p.code : '';
           return send(res, 200, { ...p, hub, line });
         }
         if (url.pathname === '/api/machines/connect') {
@@ -1658,6 +1709,17 @@ function makeHandler(entrance) {
   };
 }
 
+function writePid() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(PID_PATH, JSON.stringify({ pid: process.pid, port: settings.port, root: ROOT, startedAt: new Date().toISOString() }));
+  } catch (err) { console.log('Could not write PID file:', err.message); }
+}
+function clearPid() { try { fs.unlinkSync(PID_PATH); } catch { /* already gone */ } }
+process.on('exit', clearPid);
+process.on('SIGINT', () => { clearPid(); process.exit(0); });
+process.on('SIGTERM', () => { clearPid(); process.exit(0); });
+
 function listen(server, port, host, what) {
   return new Promise((resolve) => {
     server.on('error', (err) => {
@@ -1673,6 +1735,7 @@ function listen(server, port, host, what) {
 (async () => {
   const local = `http://localhost:${settings.port}`;
   await listen(http.createServer(makeHandler('local')), settings.port, settings.allowLan ? '0.0.0.0' : '127.0.0.1', 'local');
+  writePid();
   if (cf) {
     // Loopback only: the tunnel runs on this PC, nothing else should reach this port.
     await listen(http.createServer(makeHandler('cloudflare')), cf.port, '127.0.0.1', 'Cloudflare');

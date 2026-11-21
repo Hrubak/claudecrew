@@ -8,7 +8,9 @@
   "description": "A local chat room for a team of Claude Code agents that can hand work to each other.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js --open"
+    "start": "node server.js --open",
+    "test": "node --test test/*.test.js",
+    "setup": "node setup-wizard.js --no-open"
   },
   "engines": {
     "node": ">=20"

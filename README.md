@@ -30,17 +30,17 @@ Crew drives the `claude` command you already have, so it runs on your Claude sub
 
 ## Quick start
 
-**Windows (easiest).** Click the green **Code** button on this page, choose **Download ZIP**, right-click the zip and **Extract All**, then double-click **INSTALL.bat**. It asks a few plain questions (your name, phone access, which folders you want helpers for), installs what is missing, writes your settings and opens Crew. No administrator rights needed. Full step-by-step with fixes for work laptops: [docs/SETUP.md](docs/SETUP.md).
-
-Prefer one line? Paste this into PowerShell (it installs to your user folder, in `ClaudeCrew`):
+**Windows (easiest).** Clone this repository (or `Hrubak/claudecrew`, branch `crew-mods`), then double-click **setup.cmd**. A local wizard opens in your browser: it checks Node, git and the Claude CLI, lets you choose a git source and an install folder, writes your settings and opens Crew. Installs are always a git clone, never a ZIP. No administrator rights needed. Full step-by-step: [docs/SETUP.md](docs/SETUP.md).
 
 ```powershell
-irm https://raw.githubusercontent.com/hast3/claudecrew/main/install.ps1 | iex
+git clone --branch main https://github.com/hast3/claudecrew.git
+cd claudecrew
+.\setup.cmd
 ```
 
-Run it again any time to update.
+Run `setup.cmd` again to repair an existing install, switch source, or uninstall.
 
-**Another PC for the same crew?** On the hub open **🖥 Machines → Get pairing code**. It shows a one-line command with the code filled in. Paste it into PowerShell on the new PC.
+**Another PC for the same crew?** Install Crew on the new PC with `setup.cmd`, then on the hub open **🖥 Machines → Get pairing code**. Enter the hub address and code in the new PC’s Machines panel.
 
 **Mac, Linux or by hand:** `git clone https://github.com/hast3/claudecrew`, copy `crew.config.example.json` to `crew.config.json`, then `npm start`. New to Claude Code or the terminal? [docs/SETUP-ADVANCED.md](docs/SETUP-ADVANCED.md) walks through everything.
 

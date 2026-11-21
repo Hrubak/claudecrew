@@ -3,10 +3,11 @@ CLAUDE CREW - START HERE
 
 You only need to do ONE thing:
 
-   Double-click the file called  INSTALL.bat
+   Double-click the file called  setup.cmd
 
-Then answer the questions it asks. Press Enter to accept the answer shown in [brackets].
-It installs everything and opens Crew in your web browser when it is done.
+A setup wizard opens in your browser. It checks Node, git and the Claude CLI,
+lets you choose a source (a git clone, never a ZIP), pick the install folder,
+set a few options, and opens Crew when it is done.
 
 If Windows shows a blue "Windows protected your PC" box:
    click "More info", then "Run anyway".
@@ -16,8 +17,11 @@ Get one at https://claude.ai
 
 Next time, double-click the "Claude Crew" icon on your Desktop.
 
-If something goes wrong, the installer says what to do. You can run INSTALL.bat again as
-many times as you like. It never deletes your settings or chat history.
-If you are stuck, send the file install-log.txt (in this folder) to whoever is helping you.
+To uninstall, double-click uninstall.cmd, or use Settings > General > Uninstall Claude Crew.
+A backup of your data is offered by default.
 
-Full guide with pictures-in-words and fixes: docs\SETUP.md
+If something goes wrong, the wizard says what to do. You can run setup.cmd again as
+many times as you like. It never deletes your settings or chat history unless you
+choose Uninstall and confirm.
+
+Full guide: docs\SETUP.md

@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Crew setup</title>
+<style>
+  :root {
+    --bg: #1f1e1d; --panel: #262624; --panel-2: #30302d; --text: #ecebe6; --muted: #9c9a92;
+    --border: #3a3936; --accent: #d97757; --accent-text: #fff;
+    --ok: #6fb581; --warn: #d9a54a; --err: #e0705c; --code: #1a1918;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  a { color: var(--accent); }
+  header {
+    display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+    border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  header h1 small { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+  .logo { width: 28px; height: 28px; border-radius: 50%; background: #d97757; color: #fff; display: grid; place-items: center; font-weight: 700; }
+  .shell { max-width: 920px; margin: 0 auto; padding: 20px 16px 40px; }
+  .steps { display: flex; list-style: none; margin: 0 0 18px; padding: 0; gap: 0; overflow-x: auto; }
+  .steps li { flex: 1; min-width: 80px; text-align: center; font-size: 12px; color: var(--muted); position: relative; }
+  .steps li::before { content: attr(data-n); display: block; width: 26px; height: 26px; margin: 0 auto 6px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); line-height: 24px; font-weight: 600; }
+  .steps li:not(:last-child)::after { content: ""; position: absolute; top: 13px; left: calc(50% + 16px); right: calc(-50% + 16px); height: 1px; background: var(--border); }
+  .steps li.done { color: var(--ok); } .steps li.done::before { background: var(--ok); border-color: var(--ok); color: #fff; content: "✓"; }
+  .steps li.on { color: var(--text); font-weight: 600; } .steps li.on::before { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  .page { padding: 20px 22px 8px; }
+  .page h2 { margin: 0 0 4px; font-size: 18px; }
+  .lead { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+  .scard { border: 1px solid var(--border); border-radius: 12px; margin-bottom: 14px; }
+  .srow { display: flex; gap: 14px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .srow:last-child { border-bottom: 0; } .srow .l { flex: 1; min-width: 0; } .srow b { font-weight: 600; }
+  .srow p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  .srow.stack { flex-direction: column; align-items: stretch; gap: 8px; }
+  .stx, select.stx, input.stx { width: 250px; box-sizing: border-box; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+  .pathctl { display: flex; gap: 8px; } .pathctl .stx { flex: 1; width: auto; min-width: 0; }
+  .sw { position: relative; width: 38px; height: 22px; flex: none; }
+  .sw input { opacity: 0; position: absolute; inset: 0; margin: 0; cursor: pointer; z-index: 1; }
+  .sw i { position: absolute; inset: 0; background: var(--border); border-radius: 99px; }
+  .sw i::after { content: ""; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; background: #fff; border-radius: 50%; }
+  .sw input:checked + i { background: var(--accent); } .sw input:checked + i::after { left: 19px; }
+  .btn { border: 1px solid var(--border); background: var(--panel-2); border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+  .btn.danger { background: var(--err); color: #fff; border-color: transparent; font-weight: 600; }
+  .warnbox, .errbox, .okbox { border-radius: 10px; padding: 9px 12px; font-size: 12px; margin-bottom: 12px; }
+  .warnbox { background: color-mix(in srgb, var(--warn) 12%, transparent); border: 1px solid var(--warn); }
+  .errbox { background: color-mix(in srgb, var(--err) 14%, transparent); border: 1px solid var(--err); }
+  .okbox { background: color-mix(in srgb, var(--ok) 14%, transparent); border: 1px solid var(--ok); }
+  .check { display: flex; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .check:last-child { border-bottom: 0; }
+  .dot { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff; flex: none; }
+  .dot.ok { background: var(--ok); } .dot.miss { background: var(--err); } .dot.warn { background: var(--warn); }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .radios { display: grid; gap: 8px; margin-bottom: 14px; }
+  .radio { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); cursor: pointer; }
+  .radio:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+  .radio input { margin-top: 3px; accent-color: var(--accent); }
+  .foot { display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--border); }
+  .grow { flex: 1; }
+  .log { font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; max-height: 260px; overflow: auto; margin-bottom: 14px; }
+  .done-hero { text-align: center; padding: 18px 8px 8px; }
+  .bdg { font-size: 10px; padding: 1px 6px; border-radius: 99px; margin-left: 6px; border: 1px solid; }
+  .bdg.risk { color: var(--err); border-color: var(--err); } .bdg.cost { color: var(--warn); border-color: var(--warn); }
+  .filelist { margin: 8px 0 0; padding: 0; list-style: none; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">C</div>
+  <h1>Claude Crew <small id="hdrSub">Setup</small></h1>
+</header>
+<main class="shell">
+  <ol class="steps" id="stepper"></ol>
+  <div class="card">
+    <section class="page" data-id="mode" hidden>
+      <h2>This folder already has Crew</h2>
+      <p class="lead" id="modeLead"></p>
+      <div class="radios">
+        <label class="radio"><input type="radio" name="mode" value="repair" checked><div><b>Repair</b><p>Check prerequisites and fix missing pieces. Your settings and chat history stay put.</p></div></label>
+        <label class="radio"><input type="radio" name="mode" value="switch"><div><b>Switch source</b><p>Move this clone to another fork or branch. Uncommitted work is never discarded.</p></div></label>
+        <label class="radio"><input type="radio" name="mode" value="uninstall"><div><b>Uninstall</b><p>Stop Crew, remove shortcuts and autostart, and choose what happens to your data.</p></div></label>
+      </div>
+    </section>
+    <section class="page" data-id="prereqs" hidden>
+      <h2>Prerequisites</h2>
+      <p class="lead">Crew needs Node.js 20+, git, and the Claude CLI signed in with a paid Claude plan.</p>
+      <div class="scard" id="prereqList"></div>
+    </section>
+    <section class="page" data-id="source" hidden>
+      <h2>Choose source</h2>
+      <p class="lead">Crew is always installed as a git clone, never a ZIP.</p>
+      <div class="radios" id="sourceRadios"></div>
+      <div class="srow"><div class="l"><b>Custom git URL</b></div><input class="stx" id="customUrl" type="text" placeholder="https://github.com/owner/repo.git" disabled></div>
+      <div class="srow"><div class="l"><b>Branch</b><p>Validated with <span class="mono">git ls-remote --heads</span>.</p></div>
+        <input class="stx" id="branchSel" list="branchList" placeholder="main">
+        <datalist id="branchList"></datalist>
+      </div>
+      <p class="mono" id="clonePreview" style="color:var(--muted)"></p>
+    </section>
+    <section class="page" data-id="folder" hidden>
+      <h2>Install folder</h2>
+      <p class="lead">Pick where Crew should live. Type a path or click Browse. Checks run on either.</p>
+      <div class="scard"><div class="srow stack">
+        <div class="l"><b>Folder</b><p>Prefilled with <span class="mono">%USERPROFILE%\ClaudeCrew</span>.</p></div>
+        <div class="pathctl"><input class="stx" id="folderPath" type="text" spellcheck="false"><button type="button" class="btn" id="browseBtn">Browse…</button></div>
+      </div></div>
+      <div id="folderMsg"></div>
+    </section>
+    <section class="page" data-id="options" hidden>
+      <h2>Key options</h2>
+      <p class="lead">These become your first <span class="mono">crew.config.json</span>. Default effort is <b>low</b>. Autostart is off unless you turn it on.</p>
+      <div class="scard">
+        <div class="srow"><div class="l"><b>Your name</b><p>Shown on your messages.</p></div><input class="stx" id="optName"></div>
+        <div class="srow"><div class="l"><b>Port</b></div><input class="stx" id="optPort" type="number" min="1024" max="65535" value="7777"></div>
+        <div class="srow"><div class="l"><b>Allow other devices on my network</b><p>Lets your phone reach Crew over Wi-Fi. Only on networks you trust.</p></div><label class="sw"><input type="checkbox" id="optLan"><i></i></label></div>
+        <div class="srow"><div class="l"><b>Default model</b></div>
+          <select class="stx" id="optModel"><option value="">Let Crew choose</option><option>opus</option><option>sonnet</option><option>haiku</option></select></div>
+        <div class="srow"><div class="l"><b>Default effort</b><span class="bdg cost">$$</span></div>
+          <select class="stx" id="optEffort"><option selected>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div>
+        <div class="srow"><div class="l"><b>Permission mode</b><span class="bdg risk">⚠</span><p>What agents may do without asking you first.</p></div>
+          <select class="stx" id="optPerm"><option>auto</option><option>default</option><option>acceptEdits</option><option>plan</option><option>bypassPermissions</option></select></div>
+        <div class="srow"><div class="l"><b>Start Crew when I sign in to Windows</b><p>Optional. Off by default. Creates a Startup-folder tray shortcut.</p></div><label class="sw"><input type="checkbox" id="optAuto"><i></i></label></div>
+      </div>
+      <div id="permWarn"></div>
+    </section>
+    <section class="page" data-id="install" hidden>
+      <h2>Install</h2>
+      <p class="lead">Cloning the source you picked, writing settings, then starting Crew.</p>
+      <div class="log" id="installLog"></div>
+    </section>
+    <section class="page" data-id="done" hidden>
+      <div class="done-hero">
+        <div class="logo" style="width:56px;height:56px;font-size:28px;margin:0 auto 12px">C</div>
+        <h2 id="doneTitle">ALL DONE.</h2>
+        <p class="lead" id="doneLead"></p>
+        <p><button type="button" class="btn primary" id="openCrew">Open Crew</button></p>
+      </div>
+    </section>
+    <section class="page" data-id="switch" hidden>
+      <h2>Switch source</h2>
+      <p class="lead">Current remote and branch are shown below. Uncommitted changes are never discarded.</p>
+      <div class="scard" id="switchCard"></div>
+      <div id="switchWarn"></div>
+    </section>
+    <section class="page" data-id="udata" hidden>
+      <h2>Your data</h2>
+      <p class="lead">Choose what happens to <span class="mono">data/</span>, <span class="mono">crew.config.json</span>, summaries and agent workspaces inside the install folder. External project folders are never deleted.</p>
+      <div class="radios">
+        <label class="radio"><input type="radio" name="dataMode" value="backup" checked><div><b>Back up (recommended)</b><p>Save a zip outside the install folder, then remove Crew and that data.</p></div></label>
+        <label class="radio"><input type="radio" name="dataMode" value="keep"><div><b>Keep</b><p>Remove the app files, but leave your config, data and workspaces in the folder.</p></div></label>
+        <label class="radio"><input type="radio" name="dataMode" value="delete"><div><b>Delete</b><p>Permanently delete Crew and the user data inside the install folder. This cannot be undone.</p></div></label>
+      </div>
+      <p class="mono" id="backupPath" style="color:var(--muted)"></p>
+    </section>
+    <section class="page" data-id="confirm" hidden>
+      <h2>Confirm uninstall</h2>
+      <p class="lead">Review exactly what will be deleted. This cannot be undone once you confirm (except for a backup you already chose).</p>
+      <div id="deleteList"></div>
+      <div class="errbox">Type <b>UNINSTALL</b> below, then confirm.</div>
+      <div class="srow"><div class="l"><b>Confirmation</b></div><input class="stx" id="confirmText" placeholder="UNINSTALL" autocomplete="off"></div>
+    </section>
+    <section class="page" data-id="unprogress" hidden>
+      <h2>Uninstalling…</h2>
+      <div class="log" id="unLog"></div>
+    </section>
+    <section class="page" data-id="undone" hidden>
+      <div class="done-hero">
+        <h2>Crew has been uninstalled.</h2>
+        <p class="lead" id="undoneLead"></p>
+      </div>
+    </section>
+    <div class="foot">
+      <button type="button" class="btn" id="backBtn">Back</button>
+      <span class="grow"></span>
+      <button type="button" class="btn" id="secondaryBtn" hidden></button>
+      <button type="button" class="btn primary" id="nextBtn">Next</button>
+    </div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { defs: null, prereqs: null, skipLogin: false, folder: null, sourceKind: 'hast3', port: 7777, preview: null };
+const FLOWS = {
+  install: ['prereqs','source','folder','options','install','done'],
+  repair: ['prereqs','options','install','done'],
+  switch: ['switch'],
+  uninstall: ['udata','confirm','unprogress','undone'],
+  existing: ['mode'],
+};
+let flow = 'install', step = 0;
+
+function titles() {
+  return { prereqs:'Prerequisites', source:'Source', folder:'Folder', options:'Options', install:'Install', done:'Done', mode:'This copy', switch:'Switch source', udata:'Your data', confirm:'Confirm', unprogress:'Uninstall', undone:'Done' };
+}
+
+async function api(path, body) {
+  const opts = body !== undefined ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {};
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok && !j.error && !j.ok) j.error = r.statusText;
+  j._status = r.status;
+  return j;
+}
+
+function renderStepper() {
+  const ids = FLOWS[flow];
+  $('stepper').innerHTML = ids.map((id, i) => {
+    const cls = i === step ? 'on' : (i < step ? 'done' : '');
+    return '<li class="'+cls+'" data-n="'+(i+1)+'">'+(titles()[id]||id)+'</li>';
+  }).join('');
+  $('hdrSub').textContent = flow === 'uninstall' ? 'Uninstall' : (flow === 'switch' ? 'Switch source' : 'Setup');
+}
+
+function show() {
+  const id = FLOWS[flow][step];
+  document.querySelectorAll('.page').forEach((p) => { p.hidden = p.dataset.id !== id; });
+  renderStepper();
+  $('backBtn').hidden = id === 'done' || id === 'undone' || id === 'install' || id === 'unprogress';
+  $('backBtn').disabled = step === 0;
+  $('nextBtn').hidden = id === 'done' || id === 'undone' || id === 'install' || id === 'unprogress';
+  $('secondaryBtn').hidden = true;
+  if (id === 'prereqs') drawPrereqs();
+  if (id === 'source') drawSource();
+  if (id === 'folder') checkFolder();
+  if (id === 'options') drawPerm();
+  if (id === 'udata') loadPreview();
+  if (id === 'confirm') drawConfirm();
+  if (id === 'switch') loadSwitch();
+  setFoot();
+}
+
+function setFoot() {
+  const id = FLOWS[flow][step];
+  const next = $('nextBtn');
+  if (id === 'prereqs') {
+    const p = state.prereqs;
+    const ready = p && p.ready;
+    const loginOk = p && p.login && p.login.ok;
+    next.textContent = ready && loginOk ? 'Next' : 'Check again';
+    next.disabled = false;
+    if (ready && !loginOk) { $('secondaryBtn').hidden = false; $('secondaryBtn').textContent = 'Continue without signing in'; }
+  } else if (id === 'mode') { next.textContent = 'Continue'; next.disabled = false; }
+  else if (id === 'options') { next.textContent = flow === 'repair' ? 'Repair' : 'Install'; next.disabled = !$('optName').value.trim(); }
+  else if (id === 'confirm') { next.textContent = 'Uninstall'; next.className = 'btn danger'; next.disabled = $('confirmText').value.trim() !== 'UNINSTALL'; }
+  else { next.className = 'btn primary'; next.textContent = 'Next'; next.disabled = !canNext(); }
+  if (id !== 'confirm') next.className = 'btn primary';
+}
+
+function canNext() {
+  const id = FLOWS[flow][step];
+  if (id === 'source') return !!source().url && !!source().branch;
+  if (id === 'folder') return !!(state.folder && state.folder.ok);
+  if (id === 'options') return !!$('optName').value.trim() && +$('optPort').value >= 1024;
+  if (id === 'switch') return !(state.switchInfo && state.switchInfo.dirty);
+  return true;
+}
+
+function source() {
+  const kind = document.querySelector('input[name="src"]:checked')?.value || state.sourceKind || 'hast3';
+  const preset = state.defs?.presets?.[kind];
+  return { kind, url: kind === 'custom' ? $('customUrl').value.trim() : (preset?.url || ''), branch: $('branchSel').value.trim() };
+}
+
+async function drawPrereqs() {
+  const box = $('prereqList');
+  box.innerHTML = '<div class="check"><div class="dot warn">…</div><div>Checking…</div></div>';
+  const p = await api('/api/prereqs');
+  state.prereqs = p;
+  const rows = [
+    ['Node.js 20+', p.node, 'https://nodejs.org', 'Download Node.js LTS'],
+    ['git', p.git, 'https://git-scm.com/download/win', 'Download Git for Windows'],
+    ['Claude CLI installed', p.claude, 'https://docs.claude.com/en/docs/claude-code/setup', 'Claude Code setup'],
+    ['Claude CLI logged in', p.login, 'https://claude.ai', 'Open claude.ai'],
+  ];
+  box.innerHTML = rows.map(([name, s, href, label], i) => {
+    const st = s?.ok ? 'ok' : (name.includes('logged') && p.claude?.ok ? 'warn' : 'miss');
+    const icon = st === 'ok' ? '✓' : (st === 'warn' ? '?' : '!');
+    let extra = s?.text || '';
+    if (!s?.ok) extra += ' · <a href="'+href+'" target="_blank" rel="noopener">'+label+'</a>';
+    if (i === 3 && p.claude?.ok && !s?.ok) extra += ' · <button type="button" class="btn" id="signInBtn" style="padding:2px 8px">Open sign-in</button>';
+    return '<div class="check"><div class="dot '+st+'">'+icon+'</div><div class="l"><b>'+name+'</b><p>'+extra+'</p></div></div>';
+  }).join('');
+  const btn = $('signInBtn');
+  if (btn) btn.onclick = async () => { await api('/api/claude-login', {}); };
+  setFoot();
+}
+
+function drawSource() {
+  const presets = state.defs?.presets || {};
+  $('sourceRadios').innerHTML = [
+    ['hast3', presets.hast3, 'Upstream. Default branch is main.'],
+    ['hrubak', presets.hrubak, 'Jonathan’s fork. Default branch is crew-mods.'],
+    ['custom', null, 'Any git remote. Not a ZIP or /archive/ URL.'],
+  ].map(([k, p, d]) => '<label class="radio"><input type="radio" name="src" value="'+k+'" '+(k===(state.sourceKind||'hast3')?'checked':'')+'><div><b>'+(p?p.label:k==='custom'?'Custom git URL':k)+'</b><p style="margin:2px 0 0;font-size:12px;color:var(--muted)">'+d+'</p></div></label>').join('');
+  $('sourceRadios').onchange = () => { state.sourceKind = document.querySelector('input[name="src"]:checked').value; syncSource(); loadBranches(); };
+  $('customUrl').oninput = () => { preview(); setFoot(); loadBranches(); };
+  $('branchSel').oninput = () => { preview(); setFoot(); };
+  syncSource(); loadBranches();
+}
+function syncSource() {
+  const kind = document.querySelector('input[name="src"]:checked')?.value || 'hast3';
+  $('customUrl').disabled = kind !== 'custom';
+  const p = state.defs?.presets?.[kind];
+  if (p && !$('branchSel').dataset.touched) $('branchSel').value = p.defaultBranch;
+  preview(); setFoot();
+}
+function preview() {
+  const s = source();
+  $('clonePreview').textContent = s.url ? ('git clone --branch '+s.branch+' --single-branch '+s.url+' "<folder>"') : '';
+}
+async function loadBranches() {
+  const s = source();
+  if (!s.url) return;
+  try {
+    const j = await fetch('/api/branches?url='+encodeURIComponent(s.url)).then(r=>r.json());
+    $('branchList').innerHTML = (j.branches||[]).map(b=>'<option value="'+b+'">').join('');
+    if (j.branches?.length && !j.branches.includes($('branchSel').value)) {
+      /* keep typed branch; existence is checked later */
+    }
+  } catch {}
+}
+
+async function checkFolder() {
+  if (!$('folderPath').value) $('folderPath').value = state.defs?.installDir || '';
+  const s = source();
+  const j = await api('/api/check-folder', { path: $('folderPath').value, url: s.url, branch: s.branch });
+  state.folder = j;
+  const box = $('folderMsg');
+  const msgs = [...(j.errors||[]), ...(j.warnings||[])];
+  if (j.kind === 'missing' && j.ok) msgs.unshift('This folder does not exist yet and is writable. It will be created, then git clone will run into it.');
+  if (j.kind === 'empty' && j.ok) msgs.unshift('This empty folder is writable. Crew will be cloned into it.');
+  if (j.kind === 'git' && j.ok) msgs.unshift('This folder is already a git clone'+(j.git?.url?(' of '+j.git.url):'')+'. It can be reused.');
+  box.className = j.block ? 'errbox' : (j.warnings?.length ? 'warnbox' : 'okbox');
+  box.innerHTML = msgs.join(' ') || ('Install path: <span class="mono">'+$('folderPath').value+'</span>. This location is writable.');
+  setFoot();
+}
+
+function drawPerm() {
+  const mode = $('optPerm').value;
+  const box = $('permWarn');
+  if (mode === 'bypassPermissions') { box.className = 'errbox'; box.innerHTML = '<b>Danger: bypassPermissions.</b> Agents can edit files and run commands with no prompt. Only continue if you understand that risk.'; }
+  else if (mode === 'auto' || mode === 'acceptEdits') { box.className = 'warnbox'; box.innerHTML = '<b>Heads up:</b> “'+mode+'” can edit files and/or run commands without asking first.'; }
+  else { box.className = 'okbox'; box.textContent = '“'+mode+'” asks more often. You can change this later in Settings.'; }
+}
+
+async function runInstall() {
+  show();
+  const log = $('installLog');
+  log.textContent = '';
+  const s = source();
+  const body = {
+    kind: s.kind, url: s.url, branch: s.branch,
+    dir: flow === 'repair' ? (state.defs.dir) : $('folderPath').value,
+    autostart: $('optAuto').checked,
+    settings: {
+      userName: $('optName').value.trim(), port: +$('optPort').value, allowLan: $('optLan').checked,
+      model: $('optModel').value || null, effort: $('optEffort').value, permissionMode: $('optPerm').value,
+      machineName: state.defs.machineName,
+    },
+  };
+  const res = await fetch('/api/install', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', last = {};
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n'); buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const ev = JSON.parse(line);
+        if (ev.line) { log.textContent += ev.line + '\n'; log.scrollTop = log.scrollHeight; }
+        last = ev;
+      } catch {}
+    }
+  }
+  state.port = last.port || body.settings.port;
+  if (last.ok) { $('doneLead').innerHTML = 'Crew is running at <span class="mono">http://localhost:'+state.port+'</span>.' + (state.skipLogin ? ' Sign in later with <span class="mono">claude auth login</span>.' : ''); step = FLOWS[flow].indexOf('done'); show(); }
+  else { log.textContent += '\nSTOPPED: '+(last.error||'Install failed'); $('backBtn').hidden = false; $('backBtn').disabled = false; }
+}
+
+async function loadSwitch() {
+  const st = await fetch('/api/source?dir='+encodeURIComponent(state.defs.dir)).then(r=>r.json());
+  state.switchInfo = st;
+  $('switchCard').innerHTML = st.isGit
+    ? '<div class="srow"><div class="l"><b>Current source</b></div><div class="mono">'+esc(st.url)+'<br>branch '+esc(st.branch)+' · '+esc(st.sha)+'</div></div>'
+      + '<div class="srow"><div class="l"><b>New source</b></div><select class="stx" id="swKind"><option value="hast3">hast3/claudecrew</option><option value="hrubak">Hrubak/claudecrew</option><option value="custom">Custom git URL…</option></select></div>'
+      + '<div class="srow"><div class="l"><b>Branch</b></div><input class="stx" id="swBranch" value="'+esc(st.branch)+'"></div>'
+      + '<div class="srow" id="swUrlRow" hidden><div class="l"><b>URL</b></div><input class="stx" id="swUrl" value="'+esc(st.url)+'"></div>'
+    : '<div class="errbox">This copy is not a git clone, so it cannot switch source in place. Install a fresh clone with setup.cmd.</div>';
+  const warn = $('switchWarn');
+  if (st.dirty) { warn.className = 'warnbox'; warn.innerHTML = '⚠ You have uncommitted local changes. Crew will not switch source and will not discard them.<ul class="filelist">'+st.dirtyFiles.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>'; }
+  else { warn.className = 'okbox'; warn.textContent = 'Working tree is clean.'; }
+  const kind = $('swKind');
+  if (kind) kind.onchange = () => { $('swUrlRow').hidden = kind.value !== 'custom'; if (state.defs.presets[kind.value]) $('swBranch').value = state.defs.presets[kind.value].defaultBranch; };
+  setFoot();
+}
+function esc(s) { return String(s||'').replace(/[&<>"]/g, (c)=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+
+async function doSwitch() {
+  const kind = $('swKind').value;
+  const preset = state.defs.presets[kind];
+  const url = kind === 'custom' ? $('swUrl').value.trim() : preset.url;
+  const branch = $('swBranch').value.trim();
+  const j = await api('/api/source', { dir: state.defs.dir, url, branch });
+  if (j.ok) { $('doneTitle').textContent = 'Source switched.'; $('doneLead').textContent = 'Now on '+j.url+' ('+j.branch+'). Restart Crew to load the new files.'; flow = 'install'; step = FLOWS.install.indexOf('done'); show(); }
+  else { $('switchWarn').className = 'errbox'; $('switchWarn').textContent = j.error || 'Switch failed'; }
+}
+
+async function loadPreview() {
+  const mode = document.querySelector('input[name="dataMode"]:checked')?.value || 'backup';
+  const j = await fetch('/api/uninstall/preview?dir='+encodeURIComponent(state.defs.dir)+'&dataMode='+mode).then(r=>r.json());
+  state.preview = j;
+  $('backupPath').textContent = j.backupPath ? ('Backup file: ' + j.backupPath) : (mode === 'keep' ? 'User data will stay in the install folder.' : 'No backup will be written.');
+}
+async function drawConfirm() {
+  await loadPreview();
+  const j = state.preview;
+  const items = (j.willDelete||[]).filter(d => d.rel !== '.').map(d => '<li>'+esc(d.rel)+(d.safe===false?' (skipped: '+esc(d.reason)+')':'')+'</li>').join('');
+  const arts = (j.artifacts||[]).map(a => '<li>'+esc(a.type)+(a.path?': '+esc(a.path):a.name?': '+esc(a.name):'')+(a.detect?' (if present)':'')+'</li>').join('');
+  $('deleteList').innerHTML = '<div class="errbox"><b>Will be deleted inside '+esc(j.installDir)+'</b><ul class="filelist">'+items+'</ul>'
+    + (arts ? '<b>Shortcuts and autostart</b><ul class="filelist">'+arts+'</ul>' : '')
+    + (j.backupPath ? '<p>A backup will be written first to <span class="mono">'+esc(j.backupPath)+'</span>.</p>' : '')
+    + (j.willKeep?.length ? '<p>Kept: '+(j.willKeep.map(u=>u.rel).join(', '))+'</p>' : '')
+    + '</div>';
+  setFoot();
+}
+async function runUninstall() {
+  show();
+  const log = $('unLog');
+  log.textContent = 'Working…\n';
+  const mode = document.querySelector('input[name="dataMode"]:checked')?.value || 'backup';
+  const j = await api('/api/uninstall', { dir: state.defs.dir, dataMode: mode, backupPath: state.preview?.backupPath, dryRun: false });
+  if (j.ok) {
+    log.textContent = (j.actions||[]).map(a => (a.action||'') + (a.path?('  '+a.path):'')).join('\n');
+    $('undoneLead').innerHTML = (j.backup && j.backup.path) ? ('A backup is at <span class="mono">'+esc(j.backup.path)+'</span>.') : 'No backup was written.';
+    step = FLOWS.uninstall.indexOf('undone'); show();
+  } else { log.textContent += '\nSTOPPED: '+(j.error||'Uninstall failed'); $('backBtn').hidden = false; }
+}
+
+$('backBtn').onclick = () => { if (step>0) { step--; show(); } };
+$('secondaryBtn').onclick = () => { state.skipLogin = true; step++; show(); };
+$('nextBtn').onclick = async () => {
+  const id = FLOWS[flow][step];
+  if (id === 'prereqs') {
+    const p = state.prereqs;
+    if (!(p && p.ready && (p.login.ok || state.skipLogin))) { await drawPrereqs(); setFoot(); if (!(state.prereqs.ready && (state.prereqs.login.ok || state.skipLogin))) return; }
+  }
+  if (id === 'mode') {
+    flow = document.querySelector('input[name="mode"]:checked').value;
+    step = 0; show(); return;
+  }
+  if (id === 'folder') { await checkFolder(); if (!state.folder?.ok) return; }
+  if (id === 'source') {
+    const s = source();
+    const ok = await fetch('/api/branches?url='+encodeURIComponent(s.url)).then(r=>r.json()).catch(()=>({}));
+    if (s.branch && ok.branches && !ok.branches.includes(s.branch)) {
+      alert('Branch "'+s.branch+'" was not listed by git ls-remote. Check the name, or wait and try again.');
+      return;
+    }
+  }
+  if (id === 'options') { await runInstall(); return; }
+  if (id === 'switch') { await doSwitch(); return; }
+  if (id === 'confirm') { if ($('confirmText').value.trim() !== 'UNINSTALL') return; flow='uninstall'; step=FLOWS.uninstall.indexOf('unprogress'); await runUninstall(); return; }
+  if (step < FLOWS[flow].length-1) { step++; show(); }
+};
+$('browseBtn').onclick = async () => {
+  const j = await api('/api/browse-folder', { current: $('folderPath').value });
+  if (j.ok && j.path) { $('folderPath').value = j.path; await checkFolder(); }
+  else if (j.error === 'not available') alert(j.message || 'The folder picker is only available on Windows. Type a path instead.');
+};
+$('folderPath').addEventListener('change', checkFolder);
+$('optPerm').addEventListener('change', drawPerm);
+$('optName').addEventListener('input', setFoot);
+$('confirmText').addEventListener('input', setFoot);
+document.querySelectorAll('input[name="dataMode"]').forEach((el) => el.addEventListener('change', loadPreview));
+$('openCrew').onclick = () => api('/api/open', { url: 'http://localhost:'+state.port });
+
+(async () => {
+  state.defs = await api('/api/defaults');
+  $('folderPath').value = state.defs.installDir;
+  $('optName').value = state.defs.userName || '';
+  const q = new URLSearchParams(location.search);
+  if (q.get('mode') === 'uninstall' || state.defs.uninstall) flow = 'uninstall';
+  else if (q.get('mode') === 'existing' || (state.defs.detect && state.defs.detect.existing && q.get('mode') !== 'install')) {
+    flow = 'existing';
+    const d = state.defs.detect;
+    $('modeLead').textContent = 'Detected a '+d.kind+' install at '+d.path+'. What would you like to do?';
+  }
+  show();
+})();
+</script>
+</body>
+</html>

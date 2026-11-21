@@ -270,6 +270,8 @@
   .linkbtn { background: none; border: 0; color: var(--accent); padding: 0; font-size: 12px; text-decoration: underline; flex: none; }
   .btn { border: 1px solid var(--border); background: var(--panel-2); border-radius: 8px; padding: 4px 10px; font-size: 13px; }
   .btn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+  .btn.danger { background: var(--err); color: #fff; border-color: transparent; font-weight: 600; }
+  .filelist { margin: 8px 0 0; padding: 0; list-style: none; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
   .btn:disabled { opacity: .55; cursor: default; }
   .thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
   .thumbs img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
@@ -373,6 +375,10 @@
   #setBody .step .stn { width: 52px; border: 0; text-align: center; background: var(--bg); color: var(--text); font: inherit; -moz-appearance: textfield; }
   .step .stn::-webkit-inner-spin-button { display: none; }
   .warnbox { background: color-mix(in srgb, var(--warn) 12%, transparent); border: 1px solid var(--warn); border-radius: 10px; padding: 9px 12px; font-size: 12px; margin-bottom: 12px; }
+  .okbox { background: color-mix(in srgb, var(--ok) 12%, transparent); border: 1px solid var(--ok); border-radius: 10px; padding: 9px 12px; font-size: 12px; margin-bottom: 12px; }
+  .errbox { background: color-mix(in srgb, var(--err) 12%, transparent); border: 1px solid var(--err); border-radius: 10px; padding: 9px 12px; font-size: 12px; margin-bottom: 12px; }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+
   #rsBanner { position: sticky; top: -16px; z-index: 2; display: flex; gap: 10px; align-items: center; background: color-mix(in srgb, var(--accent) 14%, var(--panel)); border: 1px solid var(--accent); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
   #rsBanner[hidden] { display: none; } #rsBanner span { flex: 1; }
   .snone { color: var(--muted); padding: 20px 0; text-align: center; }
@@ -1823,13 +1829,91 @@
     const rng = (id, v, mn, mx, st, u) => `<div class="ctl"><input type="range" id="${id}" min="${Math.min(mn, v)}" max="${Math.max(mx, v)}" step="${st}" value="${v}" data-u="${u}"><span class="val"></span></div>`;
     const win = (id, v) => { const p = v === 200000 || v === 1000000; return '<div class="win"><select class="stx" data-win="'+id+'" style="width:130px"><option value="200000"'+(v===200000?' selected':'')+'>200k</option><option value="1000000"'+(v===1000000?' selected':'')+'>1M</option><option value="custom"'+(p?'':' selected')+'>Custom…</option></select><input class="stx wn" type="number" id="'+id+'" min="1000" step="10000" value="'+v+'"'+(p?' hidden':'')+' placeholder="tokens"></div>'; };
     const stp = (id, v, mn, mx) => `<div class="step"><button type="button" data-st="-1" aria-label="less">−</button><input class="stn" type="number" id="${id}" min="${mn}" max="${mx}" value="${esc(v)}"><button type="button" data-st="1" aria-label="more">+</button></div>`;
+    async function bindSourceAndUninstall() {
+      const card = $('#swCard'), warn = $('#swWarn'), go = $('#swGo');
+      if (!card) return;
+      const st = await fetch('/api/source').then((r) => r.json()).catch((e) => ({ error: e.message }));
+      if (st.error || st._status === 403) { card.innerHTML = `<div class="srow"><div class="l"><b>Switch source</b><p>${esc(st.error || 'Only available on this PC.')}</p></div></div>`; return; }
+      if (!st.isGit) {
+        card.innerHTML = `<div class="srow"><div class="l"><b>Current source</b><p>This copy is not a git clone, so it cannot switch source in place. Install a fresh clone with setup.cmd.</p></div></div>`;
+        return;
+      }
+      card.innerHTML = `${row('Current source', 'Config, data and secrets stay untouched.', `<div class="mono" style="text-align:right;font-size:12px;color:var(--muted)">${esc(st.url)}<br>branch ${esc(st.branch)} · ${esc(st.sha)}</div>`)}
+        ${row('New source', 'hast3/claudecrew, Hrubak/claudecrew, or a custom git URL, then a branch.', `<select class="stx" id="swKind"><option value="hast3">hast3/claudecrew</option><option value="hrubak">Hrubak/claudecrew</option><option value="custom">Custom git URL…</option></select>`)}
+        ${row('Custom URL', 'Used when Custom is selected.', txt('swUrl', st.url))}
+        ${row('Branch', 'Fetched, then checked out. Never discarded if you have local edits.', txt('swBranch', st.branch))}`;
+      const urlRow = $('#swUrl')?.closest('.srow'); if (urlRow) urlRow.hidden = true;
+      $('#swKind').onchange = () => { urlRow.hidden = $('#swKind').value !== 'custom'; };
+      if (st.dirty) {
+        warn.hidden = false; warn.className = 'warnbox';
+        warn.innerHTML = '⚠ You have uncommitted local changes. Crew will not switch source and will not discard them.<ul class="filelist">' + (st.dirtyFiles||[]).map((f) => '<li>'+esc(f)+'</li>').join('') + '</ul>';
+        go.disabled = true;
+      } else {
+        warn.hidden = false; warn.className = 'okbox';
+        warn.textContent = 'Working tree is clean. Switching will fetch, switch, npm install, and ask you to restart.';
+        go.disabled = false;
+      }
+      go.onclick = async () => {
+        const kind = $('#swKind').value;
+        const url = kind === 'custom' ? $('#swUrl').value.trim() : (kind === 'hrubak' ? 'https://github.com/Hrubak/claudecrew.git' : 'https://github.com/hast3/claudecrew.git');
+        const branch = $('#swBranch').value.trim() || (kind === 'hrubak' ? 'crew-mods' : 'main');
+        go.disabled = true; go.textContent = 'Switching…';
+        const r = await api('/api/source', { url, branch });
+        if (r.ok) { warn.className = 'okbox'; warn.textContent = 'Switched to ' + r.url + ' (' + r.branch + '). Restart Crew to load the new files.'; $('#rsBanner').hidden = false; }
+        else { warn.hidden = false; warn.className = 'errbox'; warn.textContent = r.error || 'Switch failed'; go.disabled = false; go.textContent = 'Switch and restart'; }
+      };
+
+      const unOpen = $('#unOpen'), unPanel = $('#unPanel'), unGo = $('#unGo');
+      const refreshUn = async () => {
+        const mode = $('#unMode').value;
+        const prev = await fetch('/api/uninstall/preview?dataMode=' + encodeURIComponent(mode)).then((r) => r.json()).catch((e) => ({ error: e.message }));
+        const list = $('#unList');
+        list.hidden = false;
+        if (prev.error) { list.className = 'errbox'; list.textContent = prev.error; return prev; }
+        const dels = (prev.willDelete || []).filter((d) => d.rel !== '.').map((d) => '<li>' + esc(d.rel) + '</li>').join('');
+        const arts = (prev.artifacts || []).map((a) => '<li>' + esc(a.type) + (a.path ? ': ' + esc(a.path) : a.name ? ': ' + esc(a.name) : '') + (a.detect ? ' (if present)' : '') + '</li>').join('');
+        list.className = 'errbox';
+        list.innerHTML = '<b>Will be deleted</b><ul class="filelist">' + dels + '</ul>' + (arts ? '<b>Shortcuts and autostart</b><ul class="filelist">' + arts + '</ul>' : '') + (prev.backupPath ? '<p>Backup: <span class="mono">' + esc(prev.backupPath) + '</span></p>' : '');
+        return prev;
+      };
+      unOpen.onclick = async () => { unPanel.hidden = false; unOpen.disabled = true; await refreshUn(); };
+      $('#unMode').onchange = refreshUn;
+      $('#unConfirm').oninput = () => { unGo.disabled = $('#unConfirm').value.trim() !== 'UNINSTALL'; };
+      unGo.onclick = async () => {
+        if ($('#unConfirm').value.trim() !== 'UNINSTALL') return;
+        unGo.disabled = true; unGo.textContent = 'Uninstalling…';
+        const prev = await refreshUn();
+        const r = await api('/api/uninstall', { dataMode: $('#unMode').value, backupPath: prev.backupPath });
+        if (r.ok || r.handedOff) {
+          $('#unList').className = 'okbox';
+          $('#unList').innerHTML = 'Crew is stopping. ' + (r.backup && r.backup.path ? 'Backup: <span class="mono">' + esc(r.backup.path) + '</span>' : 'No backup was written.');
+        } else { $('#unList').className = 'errbox'; $('#unList').textContent = r.error || 'Uninstall failed'; unGo.disabled = false; unGo.textContent = 'Confirm uninstall'; }
+      };
+    }
+
     const SECS = [
       ['gen', '⚙', 'General', '', `<div class="scard">
         ${row('Your name', 'Shown on your messages.', txt('sUser', s.userName))}
         ${row('Default agent', 'Who answers when you don’t @mention anyone.', sel('sDef', cfg.agents.map((a) => opt(a.id, a.name || a.id, s.defaultAgent)).join('')))}
         ${row('Machine name', 'How this PC appears to paired devices.', txt('sMach', s.machineName))}
         ${row('Port', 'Where Crew listens on this PC.', `<input class="stx" type="number" id="sPort" value="${esc(s.port)}" min="1024" max="65535">`, BD.rs)}
-        ${row('Allow other devices on my network', 'Lets your phone reach Crew over Wi-Fi. Only on networks you trust.', tg('sLan', s.allowLan), BD.rs)}</div>`],
+        ${row('Allow other devices on my network', 'Lets your phone reach Crew over Wi-Fi. Only on networks you trust.', tg('sLan', s.allowLan), BD.rs)}</div>
+        <div class="ssh"><h4>Switch source</h4></div>
+        <div class="scard" id="swCard"><div class="srow"><div class="l"><b>Current source</b><p>Loading…</p></div></div></div>
+        <div id="swWarn" hidden></div>
+        <div class="srow2" style="margin-bottom:14px"><button class="btn primary" id="swGo" type="button" disabled>Switch and restart</button></div>
+        <div class="ssh"><h4>Danger zone</h4></div>
+        <div class="scard" id="unCard">
+          <div class="srow"><div class="l"><b>Uninstall Claude Crew</b><p>Stop Crew, remove shortcuts and autostart, and choose what happens to your data. External project folders are never deleted.</p></div>
+            <button class="btn danger" id="unOpen" type="button">Uninstall Claude Crew</button></div>
+          <div id="unPanel" hidden>
+            <div class="srow"><div class="l"><b>Your data</b><p>Backup is the default. The zip is written outside the install folder.</p></div>
+              <select class="stx" id="unMode"><option value="backup" selected>Back up (recommended)</option><option value="keep">Keep data in the folder</option><option value="delete">Delete everything</option></select></div>
+            <div id="unList" class="errbox" hidden></div>
+            <div class="srow"><div class="l"><b>Type UNINSTALL to confirm</b></div><input class="stx" id="unConfirm" placeholder="UNINSTALL" autocomplete="off"></div>
+            <div class="srow2"><button class="btn danger" id="unGo" type="button" disabled>Confirm uninstall</button></div>
+          </div>
+        </div>`],
       ['mod', '🧠', 'Models & Effort', 'cost risk', `<div class="scard">
         ${row('Default model', '“Let Crew choose” picks by task size.', sel('sModel', opt('', 'Let Crew choose', s.model) + cfg.modelChoices.map((m) => opt(m, m, s.model)).join('')))}
         ${row('Default effort', 'Higher effort thinks longer and spends more tokens. Agents can override it.', sel('sEffort', cfg.effortChoices.map((e) => opt(e, e, s.effort)).join('')), BD.cost)}
@@ -1863,6 +1947,7 @@
     const unit = (el) => { const v = +el.value, u = el.dataset.u; return u === 'tokens' ? (v >= 1e6 ? +(v / 1e6).toFixed(2) + 'M' : Math.round(v / 1000) + 'k') + ' tokens' : v + (u === '%' ? '%' : ''); };
     const lbl = (el) => { el.nextElementSibling.textContent = unit(el); };
     $('#setBody').querySelectorAll('input[type=range]').forEach(lbl);
+    bindSourceAndUninstall();
     // ----- live save
     const $st = $('#setSaved');
     const state = (k, msg) => { $st.className = 'setsaved ' + k; $st.textContent = msg; if (k === 'ok') { clearTimeout(state.t); state.t = setTimeout(() => { if ($st.classList.contains('ok')) $st.textContent = ''; }, 1800); } };

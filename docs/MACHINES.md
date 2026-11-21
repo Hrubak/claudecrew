@@ -21,7 +21,7 @@ For other computers on your home network to reach the hub, set `"allowLan": true
 
 **New PC, Crew not installed yet (Windows):**
 
-1. On the hub, open **Machines → Get pairing code**. It shows a one-line command with the hub's address and a one-time code already in it. Press **Copy**.
+1. On the hub, open **Machines → Get pairing code**. It shows the hub address and a one-time code. Install Crew on the new PC with `setup.cmd` first if it is not already installed.
 2. Paste it into PowerShell on the new PC. That installs Crew (see [SETUP.md](SETUP.md)), starts it, and joins this hub.
 
 **Crew already installed on the other PC:**
@@ -54,6 +54,6 @@ Then use **Connect this PC to a hub** with `crew.example.com` as the address.
 ## How it works (for contributors)
 
 - `lib/presence.js`: hub store, pairing, heartbeat check, the client sender, and `pairOnce` (one-shot pairing with plain-language errors).
-- `install.ps1`: the Windows one-command installer/updater (Node, Claude Code, files, config, start, join hub, autostart).
+- `setup.cmd`: the Windows setup wizard (Node, git, Claude CLI, clone, config, start, optional autostart).
 - `server.js`: `POST /api/presence/pair` and `/beat` (machine secret, no browser login), `GET /api/machines` and `/api/machines/link`, `POST /api/machines/pair`, `/connect`, `/disconnect` and `/remove` (this computer only, or signed-in users).
 - `public/index.html`: the Machines panel.
