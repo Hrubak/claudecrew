@@ -343,8 +343,9 @@
   #setQ { flex: 0 1 240px; min-width: 0; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
   .setsaved { font-size: 12px; color: var(--muted); white-space: nowrap; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
   .setsaved.ok { color: var(--ok); } .setsaved.err { color: var(--err); }
-  #setBody { padding: 0; gap: 0; flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 190px minmax(0, 1fr); }
-  #sNav { padding: 10px; border-right: 1px solid var(--border); overflow-y: auto; }
+  #setBody { padding: 0; gap: 0; flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
+  #sNav { padding: 10px; border-right: 1px solid var(--border); overflow-y: auto; overflow-x: hidden; }
+  .win { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; } .win .stx.wn { width: 120px; }
   #sNav a { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; color: var(--muted); cursor: pointer; margin-bottom: 2px; white-space: nowrap; }
   #sNav a.on { background: var(--panel-2); color: var(--text); font-weight: 600; }
   #sNav a small { margin-left: auto; font-size: 10px; } #sNav a small.c { color: var(--warn); } #sNav a small.r { color: var(--err); }
@@ -1820,6 +1821,7 @@
     const sel = (id, o) => `<select id="${id}" class="stx">${o}</select>`;
     const txt = (id, v, ph = '') => `<input class="stx" type="text" id="${id}" value="${esc(v)}" placeholder="${esc(ph)}">`;
     const rng = (id, v, mn, mx, st, u) => `<div class="ctl"><input type="range" id="${id}" min="${Math.min(mn, v)}" max="${Math.max(mx, v)}" step="${st}" value="${v}" data-u="${u}"><span class="val"></span></div>`;
+    const win = (id, v) => { const p = v === 200000 || v === 1000000; return '<div class="win"><select class="stx" data-win="'+id+'" style="width:130px"><option value="200000"'+(v===200000?' selected':'')+'>200k</option><option value="1000000"'+(v===1000000?' selected':'')+'>1M</option><option value="custom"'+(p?'':' selected')+'>Custom…</option></select><input class="stx wn" type="number" id="'+id+'" min="1000" step="10000" value="'+v+'"'+(p?' hidden':'')+' placeholder="tokens"></div>'; };
     const stp = (id, v, mn, mx) => `<div class="step"><button type="button" data-st="-1" aria-label="less">−</button><input class="stn" type="number" id="${id}" min="${mn}" max="${mx}" value="${esc(v)}"><button type="button" data-st="1" aria-label="more">+</button></div>`;
     const SECS = [
       ['gen', '⚙', 'General', '', `<div class="scard">
@@ -1839,9 +1841,9 @@
         ${row('Refresh threshold', 'Suggest a fresh session once an agent’s context passes this size. Shown as the tick on the Overview gauge.', rng('sRef', s.refreshTokens, 10000, 2000000, 10000, 'tokens'), BD.free)}
         ${row('Auto-refresh when idle', 'Summarises and restarts an idle agent that is over the threshold. Spends tokens on the hand-off summary.', tg('sAutoRef', s.autoRefresh), BD.cost)}</div>
         <div class="sub">Context windows (the gauge is measured against these)</div><div class="scard">
-        ${row('Opus window', 'Model context size.', rng('sWo', s.contextWindows?.opus || 200000, 10000, 2000000, 10000, 'tokens'))}
-        ${row('Sonnet window', 'Model context size.', rng('sWs', s.contextWindows?.sonnet || 200000, 10000, 2000000, 10000, 'tokens'))}
-        ${row('Haiku window', 'Model context size.', rng('sWh', s.contextWindows?.haiku || 200000, 10000, 2000000, 10000, 'tokens'))}</div>`],
+        ${row('Opus window', 'Model context size.', win('sWo', s.contextWindows?.opus || 200000))}
+        ${row('Sonnet window', 'Model context size.', win('sWs', s.contextWindows?.sonnet || 200000))}
+        ${row('Haiku window', 'Model context size.', win('sWh', s.contextWindows?.haiku || 200000))}</div>`],
       ['jud', '🧭', 'Routing & Judge', 'cost', `<div class="warnbox">⚠ The judge makes an extra model call on routed messages, so it uses plan usage. Changes here apply right away.</div><div class="scard">
         ${row('Enable the judge', 'Picks the best agent for a message. Off = no judge calls.', tg('sJudge', s.judge.enabled), BD.cost)}
         ${row('Judge model', 'A small model keeps it cheap.', sel('sJudgeModel', cfg.modelChoices.map((m) => opt(m, m, s.judge.model)).join('')))}</div>`],
@@ -1895,9 +1897,12 @@
     body.oninput = (e) => {
       const t = e.target;
       if (t.type === 'range') return lbl(t);
+      if (t.dataset.win) return;
       if (t.closest('[data-live]') && t.matches('.stx[type=text], .stn, .stx[type=number]')) sched(800);
     };
-    body.onchange = (e) => { const t = e.target; if (t.closest('[data-live]')) sched(t.type === 'range' ? 250 : 300); };
+    const winSel = (sel) => { const n = $('#' + sel.dataset.win); if (sel.value === 'custom') { n.hidden = false; n.focus(); } else { n.hidden = true; n.value = sel.value; } };
+    const winSync = (n) => { const sel = body.querySelector('[data-win=' + n.id + ']'); const v = +n.value; sel.value = v === 200000 || v === 1000000 ? String(v) : 'custom'; n.hidden = sel.value !== 'custom'; };
+    body.onchange = (e) => { const t = e.target; if (t.dataset.win) { winSel(t); if (t.value === 'custom') return; } if (t.closest('[data-live]')) sched(t.type === 'range' ? 250 : 300); };
     body.onclick = (e) => {
       const st = e.target.closest('[data-st]');
       if (st) { const i = st.parentElement.querySelector('input'); i.value = Math.min(+i.max, Math.max(+i.min, (+i.value || 0) + +st.dataset.st)); i.dispatchEvent(new Event('change', { bubbles: true })); return; }
@@ -1909,6 +1914,7 @@
           if (!(el.id in SET_DEF)) return;
           if (el.type === 'checkbox') el.checked = SET_DEF[el.id]; else el.value = SET_DEF[el.id];
           if (el.type === 'range') lbl(el);
+          if (el.dataset && /^sW[osh]$/.test(el.id)) winSync(el);
         });
         doSave();
       }
