@@ -408,6 +408,31 @@
     #input { font-size: 16px; }
     .ibtn, #sendBtn { min-height: 44px; }
   }
+  /* Overview: docked right sidebar (Flightdeck-style) */
+  #ovPane { display: none; flex: none; width: var(--ovw, 340px); overflow-y: auto; border-left: 1px solid var(--border); background: var(--panel); padding: 10px; box-sizing: border-box; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+  #ovResize { display: none; flex: none; width: 5px; margin-left: -3px; cursor: col-resize; z-index: 5; }
+  #ovResize:hover, #ovResize.drag { background: var(--accent); }
+  body.ovopen #ovPane { display: block; } body.ovopen #ovResize { display: block; }
+  .fd-title { display: flex; justify-content: center; align-items: center; position: relative; font-weight: 700; letter-spacing: .06em; font-size: 12px; margin-bottom: 4px; }
+  .fd-title .x { position: absolute; right: 0; }
+  .fd-legend { display: flex; justify-content: center; gap: 12px; color: var(--muted); font-size: 11.5px; margin-bottom: 10px; }
+  .fd-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; }
+  .fd-box { border: 1px solid var(--fc, var(--border)); border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; display: grid; gap: 3px; }
+  .fd-box.main { --fc: var(--accent); } .fd-box.agentbox { --fc: #8b7cf0; } .fd-box.rcpt { --fc: #d97757; }
+  .fd-row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .fd-h { font-weight: 700; } .fd-h.m { color: var(--accent); } .fd-h.a { color: #8b7cf0; }
+  .fd-dim { color: var(--muted); }
+  .fd-gauge { display: inline-block; width: 60px; height: 7px; border-radius: 2px; background: var(--panel-2); border: 1px solid var(--border); vertical-align: middle; overflow: hidden; }
+  .fd-gauge i { display: block; height: 100%; background: var(--accent); } .fd-gauge i.warn { background: #d98a1f; }
+  .fd-cards { display: grid; gap: 6px; }
+  .fd-card { border: 1px solid var(--border); border-left: 3px solid #8b7cf0; border-radius: 5px; padding: 5px 8px; display: grid; gap: 1px; }
+  .fd-card.working { border-left-color: var(--accent); }
+  .fd-foot { color: var(--muted); font-size: 11px; line-height: 1.4; }
+  @media (max-width: 800px) {
+    #ovResize { display: none !important; }
+    #ovPane { position: fixed; z-index: 60; top: 0; bottom: 0; right: 0; width: min(92vw, 360px); display: block; transform: translateX(102%); transition: transform .22s; box-shadow: -4px 0 24px rgba(0,0,0,.35); padding-top: calc(12px + env(safe-area-inset-top)); }
+    body.ovopen #ovPane { transform: none; }
+  }
   #refreshBar { padding: 6px 10px; background: #d98a1f22; border-bottom: 1px solid #d98a1f; font-size: 13px; }
   #refreshBar .rrow { display: flex; gap: 8px; align-items: center; margin: 2px 0; }
   #refreshBar .rrow span { flex: 1; }
@@ -420,10 +445,6 @@
   .cpill.warm { color: #2a9d5c; border-color: #2a9d5c; }
   .cpill.low { color: #d98a1f; border-color: #d98a1f; }
   .cpill.cold { opacity: .7; }
-  .ov-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 10px; }
-  .ov-tile { border: 1px solid var(--border, #8884); border-radius: 8px; padding: 8px 10px; }
-  .ov-tile b { display: block; font-size: 18px; }
-  .ov-tile span { font-size: 11px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -471,15 +492,13 @@
   <div class="hint" id="hint"></div>
 </footer>
 </div>
+<div id="ovResize" title="Drag to resize"></div>
+<aside id="ovPane"><div class="fd-title"><span>OVERVIEW</span><button class="x" id="ovClose" title="Close">×</button></div><div id="ovBody"></div></aside>
 </div>
 
 <dialog id="usageDlg">
   <div class="dlg-head"><h3>Plan usage</h3><button class="x" data-close>×</button></div>
   <div class="dlg-body" id="usageBody"></div>
-</dialog>
-<dialog id="ovDlg">
-  <div class="dlg-head"><h3>Overview</h3><button class="x" data-close>×</button></div>
-  <div class="dlg-body" id="ovBody"></div>
 </dialog>
 <dialog id="schedDlg">
   <div class="dlg-head"><h3>Scheduled jobs</h3><button class="x" data-close>×</button></div>
@@ -754,6 +773,8 @@
   const costKnown = (t) => (t.costRuns || 0) > 0 || (t.costUSD || 0) > 0;
   const fmtTokU = (t) => !(t.runs) ? '0' : tokKnown(t) ? fmtTok(tokens(t)) : 'unknown';
   const fmtCostU = (t) => !(t.runs) ? '$0.00' : costKnown(t) ? '$' + (t.costUSD || 0).toFixed(2) : 'unknown';
+  const fmtReset = (ts) => { if (!ts) return ''; const m = Math.max(0, Math.round((ts - Date.now()) / 60000)); return ' ↻' + (m >= 1440 ? Math.floor(m / 1440) + 'd' : m >= 60 ? Math.floor(m / 60) + 'h' + (m % 60) + 'm' : m + 'm'); };
+  const gauge = (p, warn) => `<span class="fd-gauge"><i class="${p >= warn ? 'warn' : ''}" style="width:${Math.min(100, Math.max(0, p))}%"></i></span>`;
   async function renderOverview() {
     let u = usage;
     try { u = await (await fetch('/api/usage')).json(); } catch { /* fall back to cached summary */ }
@@ -761,30 +782,45 @@
     const ids = order.length ? order : Object.keys(agents);
     const working = ids.filter((id) => agents[id]?.status === 'working').length;
     const queued = ids.reduce((n, id) => n + (agents[id]?.queued || 0), 0);
-    const tile = (v, l2) => `<div class="ov-tile"><b>${v}</b><span>${l2}</span></div>`;
-    const rows = ids.map((id) => {
+    const cur = sel && !String(sel).includes(',') && agents[sel] ? sel : null;
+    const win = (name, w) => w ? `<span>${name} ${gauge(pct(w.utilization), 80)} ${pct(w.utilization)}%<span class="fd-dim">${fmtReset(w.resetsAt)}</span></span>` : `<span class="fd-dim">${name} unknown</span>`;
+    const cards = ids.map((id) => {
       const a = agents[id] || {}, t = u?.agents?.[id] || { today: {}, week: {} }, c = cacheState(id);
-      return `<tr><td>${avatar(id, 'mini')} ${esc(a.name || id)}</td><td>${esc(a.status || '?')}</td><td>${t.today.runs || 0}</td><td>${fmtTokU(t.today)}</td><td>${fmtCostU(t.today)}</td><td>${c ? esc(c.text) : 'unknown'}</td></tr>`;
+      const ctx = a.hasSession ? a.contextTokens : 0, at = a.refreshAt || 0;
+      const cp = at ? Math.round(ctx / at * 100) : 0;
+      return `<div class="fd-card ${a.status === 'working' ? 'working' : ''}"><div class="fd-row"><b>${avatar(id, 'mini')} ${esc(a.name || id)}</b><span class="fd-dim">${a.status === 'working' ? '● working' : '○ ' + esc(a.status || 'unknown')}</span></div>
+        <div class="fd-dim">ctx ${a.hasSession ? fmtTok(ctx) + (at ? ' ' + gauge(cp, 80) + ' ' + cp + '%' : '') : 'no session'}${a.queued ? ' · ' + a.queued + ' queued' : ''}</div>
+        <div class="fd-dim">${t.today.runs || 0} runs · ${fmtTokU(t.today)} · ${fmtCostU(t.today)} · ${c ? esc(c.text) : 'cache unknown'}</div></div>`;
     }).join('');
+    const lr = cur ? u?.last?.[cur] : null;
+    const rcpt = cur ? (lr && lr.ms !== undefined
+      ? `<div class="fd-row"><span>${lr.isError ? '✗' : '✓'} last turn ${lr.ms == null ? 'unknown' : fmtDur(lr.ms)}</span><span class="fd-dim">${esc(agents[cur].name)}</span></div><div class="fd-dim">cost ${lr.costUSD == null ? 'unknown' : '+$' + lr.costUSD.toFixed(2)} · agents, edits, errors: unknown</div>`
+      : `<div class="fd-dim">no turn recorded yet for ${esc(agents[cur].name)}</div>`) : `<div class="fd-dim">select one agent to see its last turn</div>`;
     $('#ovBody').innerHTML = `
-      <div class="ov-grid">
-        ${tile(working + ' / ' + ids.length, 'agents working')}
-        ${tile(queued, 'messages queued')}
-        ${tile(l?.fiveHour ? pct(l.fiveHour.utilization) + '%' : 'unknown', '5-hour plan usage')}
-        ${tile(l?.weekly ? pct(l.weekly.utilization) + '%' : 'unknown', 'weekly plan usage')}
-        ${tile(tot.today.runs || 0, 'runs today')}
-        ${tile(fmtTokU(tot.today), 'tokens today')}
-        ${tile(fmtCostU(tot.today), 'API-equivalent cost today')}
-        ${tile(u?.guard ? 'holding' : 'clear', 'budget guard')}
+      <div class="fd-legend"><span><i style="background:var(--accent)"></i>main</span><span><i style="background:#8b7cf0"></i>agents</span><span><i style="background:#d97757"></i>receipt</span></div>
+      <div class="fd-box main">
+        <div class="fd-row"><span class="fd-h m">Crew · ${working}/${ids.length} working</span><span class="fd-dim">${working ? '● busy' : '○ idle'}</span></div>
+        <div class="fd-dim">${queued} queued · budget guard ${u?.guard ? 'holding' : 'clear'}</div>
+        <div>${fmtCostU(tot.today)} today <span class="fd-dim">· ${fmtTokU(tot.today)} · ${tot.today.runs || 0} runs</span></div>
+        <div class="fd-row">${win('5h', l?.fiveHour)}${win('7d', l?.weekly)}</div>
       </div>
-      <div class="section"><h5>By agent</h5><div class="scroll-x"><table>
-        <tr><th>Agent</th><th>Status</th><th>Runs today</th><th>Tokens today</th><th>Cost today</th><th>Cache</th></tr>${rows}</table></div></div>
-      <div class="section"><h5>Savings ledger</h5>
-        <div class="small">${u?.judgeEnabled ? 'No savings recorded yet.' : 'Empty: the judge is off, so nothing is measured.'}</div></div>
-      <div class="small">Cost is what the runs would cost on the API; your subscription isn't charged it. "unknown" means the stream did not report it.</div>`;
+      <div class="fd-box agentbox"><div class="fd-h a">agents · ${working} running · ${ids.length} total</div><div class="fd-cards">${cards || '<span class="fd-dim">none</span>'}</div></div>
+      <div class="fd-box rcpt">${rcpt}</div>
+      <div class="fd-box"><div class="fd-h fd-dim">savings ledger</div><div class="fd-dim">${u?.judgeEnabled ? 'No savings recorded yet.' : 'Empty: the judge is off, so nothing is measured.'}</div></div>
+      <div class="fd-foot">Cost is the API-equivalent; your subscription isn't charged it. Context gauge is measured against the refresh threshold (Crew isn't told the model's window). "unknown" = the stream did not report it.</div>`;
   }
-  $('#ovBtn').onclick = () => { renderOverview(); open('#ovDlg'); };
-  setInterval(() => { if ($('#ovDlg').open) renderOverview(); }, 15000);
+  const ovSet = (on) => { document.body.classList.toggle('ovopen', on); $('#ovBtn').classList.toggle('on', on); store.set('crew-overview', on ? '1' : '0'); if (on) renderOverview(); };
+  $('#ovBtn').onclick = () => ovSet(!document.body.classList.contains('ovopen'));
+  $('#ovClose').onclick = () => ovSet(false);
+  { const w = parseInt(store.get('crew-overview-w'), 10); if (w >= 240 && w <= 700) document.documentElement.style.setProperty('--ovw', w + 'px'); }
+  $('#ovResize').onpointerdown = (e) => {
+    const h = $('#ovResize'); h.classList.add('drag'); h.setPointerCapture(e.pointerId);
+    const mv = (ev) => { const w = Math.min(700, Math.max(240, window.innerWidth - ev.clientX)); document.documentElement.style.setProperty('--ovw', w + 'px'); };
+    const up = () => { h.classList.remove('drag'); h.removeEventListener('pointermove', mv); h.removeEventListener('pointerup', up); store.set('crew-overview-w', parseInt(getComputedStyle($('#ovPane')).width, 10)); };
+    h.addEventListener('pointermove', mv); h.addEventListener('pointerup', up);
+  };
+  setInterval(() => { if (document.body.classList.contains('ovopen')) renderOverview(); }, 15000);
+  if (store.get('crew-overview') === '1' && window.innerWidth > 800) { document.body.classList.add('ovopen'); $('#ovBtn').classList.add('on'); setTimeout(renderOverview, 500); }
   $('#overrideBtn').onclick = () => api('/api/budget/override');
   setInterval(renderUsage, 30000);
 
