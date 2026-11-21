@@ -624,7 +624,8 @@
   // Custom icons (browser-saved): an emoji per agent, drawn as an SVG data URL so it works anywhere an <img> does.
   let crewIcons = (() => { try { return JSON.parse(store.get('crew-icons')) || {}; } catch { return {}; } })();
   const emojiSrc = (e) => 'data:image/svg+xml;utf8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><text x="32" y="32" font-size="46" text-anchor="middle" dominant-baseline="central">${e.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</text></svg>`);
-  const iconSrc = (id) => (crewIcons[id] ? emojiSrc(crewIcons[id]) : SP(id));
+  let crewPics = (() => { try { return JSON.parse(store.get('crew-pics')) || {}; } catch { return {}; } })();
+  const iconSrc = (id) => crewPics[id] || (crewIcons[id] ? emojiSrc(crewIcons[id]) : SP(id));
   const avatar = (id, cls = '') => `<img class="spav ${cls}" src="${iconSrc(id)}" alt="">`;
 
   // ---------- dialogs ----------
@@ -695,7 +696,6 @@
     return ids.sort((x, y) => (crewPins.includes(y) - crewPins.includes(x)) || rank(x) - rank(y));
   }
   function groupEl(g) {
-    const box = $('#agents');
 
   // ---------- prompt-cache countdown pill (mod 2) ----------
   // Shows how long the agent's prompt cache should stay warm after its last reply. Only drawn when the
@@ -771,6 +771,7 @@
   }
   $('#ovBtn').onclick = () => { renderOverview(); open('#ovDlg'); };
   setInterval(() => { if ($('#ovDlg').open) renderOverview(); }, 15000);
+    const box = $('#agents');
     let el = [...box.querySelectorAll('.agrp')].find((x) => x.dataset.g === g);
     if (el) return el;
     el = document.createElement('div');
@@ -950,8 +951,8 @@
       ${a.needsYou ? `<div class="card alert"><h4>Needs you</h4>${esc(a.needsYou.text)}<div class="row" style="margin-top:6px"><button class="btn" id="agJump">Show message</button></div></div>` : ''}
       <div class="section"><h5>Model</h5>
         <div class="row"><select id="agModel">${choice('', `Default${a.defaultModel ? ' (' + esc(a.defaultModel) + ')' : ''}`)}${modelChoices.map((m) => choice(m, m[0].toUpperCase() + m.slice(1))).join('')}</select>
-        <span class="small grow">${a.lastModel ? 'Last run: ' + esc(prettyModel(a.lastModel)) : ''}</span></div>
     paintRefreshBar();
+        <span class="small grow">${a.lastModel ? 'Last run: ' + esc(prettyModel(a.lastModel)) : ''}</span></div>
         <div class="small" style="margin-top:4px">Sonnet and Haiku use less of your plan for quick chores. Applies from the next message.</div></div>
       <div class="section"><h5>Crew bar</h5>
         <div class="row"><button class="btn" id="agPin">${crewPins.includes(id) ? '📌 Unpin' : '📌 Pin to front'}</button><button class="btn" id="agL">◀ Move left</button><button class="btn" id="agR">Move right ▶</button></div>
@@ -967,9 +968,9 @@
       <div class="section"><h5>Folder</h5><div class="small" style="word-break:break-all">${esc(a.cwd)}</div></div>
       <div class="row"><button class="btn" id="agReset">↺ Fresh conversation</button>${a.status !== 'idle' ? '<button class="btn" id="agStop">■ Stop</button>' : ''}<span class="grow"></span><button class="btn" id="agMention">@${esc(id)}</button></div>`;
     $('#agPin').onclick = () => { crewPins = crewPins.includes(id) ? crewPins.filter((x) => x !== id) : [...crewPins, id]; saveCrewPrefs(); };
-    $('#agGroup').onchange = () => { const v = $('#agGroup').value.trim(); if (v) crewGroups[id] = v; else delete crewGroups[id]; saveCrewPrefs(); };
         <div class="row" style="margin-top:6px"><select id="agEffort"><option value="" ${a.effort ? '' : 'selected'}>Default (${esc(a.defaultEffort || 'low')})</option>${effortChoices.map((e) => `<option value="${e}" ${a.effort === e ? 'selected' : ''}>Effort: ${e}</option>`).join('')}</select>
         <span class="small grow">${a.lastModel || a.lastEffort ? 'Last request: ' + esc(a.lastModel ? prettyModel(a.lastModel) : 'unknown model') + ' · effort ' + esc(a.lastEffort || 'unknown') : 'No request yet this session'}</span></div>
+    $('#agGroup').onchange = () => { const v = $('#agGroup').value.trim(); if (v) crewGroups[id] = v; else delete crewGroups[id]; saveCrewPrefs(); };
     $('#agL').onclick = () => moveAgent(id, -1);
     $('#agR').onclick = () => moveAgent(id, 1);
     document.querySelectorAll('.swatches button').forEach((b) => b.onclick = () => { if (b.dataset.c) crewColors[id] = b.dataset.c; else delete crewColors[id]; saveCrewPrefs(); });
@@ -1005,8 +1006,8 @@
     if (!ta.value.includes(tag)) ta.value = tag + ta.value;
     ta.focus();
     autosize();
-  }
     $('#agEffort').onchange = () => api(`/api/agents/${id}/effort`, { effort: $('#agEffort').value || null });
+  }
   function jumpTo(id) {
     const x = id && msgs.get(id);
     if (!x) return;
@@ -1109,8 +1110,8 @@
         const pb = document.createElement('button');
         pb.className = 'btn primary proceedBtn'; pb.textContent = 'PROCEED';
         pb.onclick = async () => {
-          pb.disabled = true;
       el.dataset.id = m.id;
+          pb.disabled = true;
           await api('/api/send', { text: `@${m.from} Proceed. Go ahead now; do not wait, ask, or hold off for me.`, attachments: [] });
           pb.remove();
         };
@@ -1180,8 +1181,8 @@
     }
     s.history.forEach(render);
     for (const [id, f] of Object.entries(flags)) { const x = msgs.get(id); if (x) { const box = x.el.querySelector('.extras') || x.el.querySelector('div[style]'); if (box) renderExtras(x.m, box); } }
-    for (const [agent, text] of Object.entries(s.drafts || {})) renderDraft(agent, text);
     effortChoices = s.effortChoices || [];
+    for (const [agent, text] of Object.entries(s.drafts || {})) renderDraft(agent, text);
     renderUsage();
     if ($('#schedDlg').open) renderSchedules();
     scroller.scrollTop = scroller.scrollHeight;
