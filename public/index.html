@@ -193,8 +193,10 @@
   .agent .nm { min-width: 0; overflow: hidden; }
   .agent .n { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .agent .mdl { flex: none; white-space: nowrap; }
-  .agent .cpill { flex: 0 1 auto; min-width: 0; margin-left: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .agent .cpill { flex: none; margin-left: 0; white-space: nowrap; }
   .agent.working .cpill { display: none; }
+  #agents { container-type: inline-size; }
+  @container (max-width: 300px) { .agent .cpill .cw { display: none; } }
   .agent .tools button {
     background: none; border: 0; padding: 2px 5px; border-radius: 6px; color: var(--muted); font-size: 13px;
   }
@@ -709,12 +711,13 @@
   function cacheState(id) {
     const l = usage?.last?.[id];
     if (!l || !l.cacheReported) return null;
-    if (!l.ttlMs) return { text: 'cache ?', cls: '', title: 'Cache lifetime unknown: the stream did not report it.' };
+    if (!l.ttlMs) return { text: 'cache ?', value: '?', cls: '', title: 'Prompt cache lifetime unknown: the stream did not report it.' };
     const left = l.at + l.ttlMs - Date.now();
     const full = l.ttlMs >= 3600e3 ? '1h' : '5m';
-    if (left <= 0) return { text: 'cache cold', cls: 'cold', title: `The ${full} prompt cache has expired. The next message re-reads the full context.` };
+    if (left <= 0) return { text: 'cache cold', value: 'cold', cls: 'cold', title: `Prompt cache: the ${full} cache has expired. The next message re-reads the full context.` };
     const s = Math.ceil(left / 1000);
-    return { text: `cache ${s >= 3600 ? Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0')}`, cls: left < 60e3 ? 'low' : 'warm', title: `Prompt cache (${full}) warm until ${time(l.at + l.ttlMs)}.` };
+    const value = s >= 3600 ? Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    return { text: `cache ${value}`, value, cls: left < 60e3 ? 'low' : 'warm', title: `Prompt cache (${full}) warm until ${time(l.at + l.ttlMs)}.` };
   }
   function paintCachePills() {
     for (const id of Object.keys(agents)) {
@@ -722,7 +725,7 @@
       if (!el) continue;
       const c = cacheState(id);
       el.hidden = !c;
-      if (c) { el.textContent = c.text; el.className = 'cpill ' + c.cls; el.title = c.title; }
+      if (c) { el.replaceChildren(Object.assign(document.createElement('span'), { className: 'cw', textContent: 'cache ' }), c.value); el.className = 'cpill ' + c.cls; el.title = c.title; }
     }
   }
   setInterval(paintCachePills, 1000);
