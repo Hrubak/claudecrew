@@ -764,6 +764,7 @@ function launch(a, item, isRetry, snapP) {
     }
     const original = coalesceUsers(steerBatch.splice(0));
     const at = Date.now();
+    traceStart('steer', { text: 'Your follow-up was passed to the running turn.' });
     writtenLate.push({ ...original, at });
     try {
       proc.stdin.write(streamUserLine(formatPrompt({
@@ -800,9 +801,52 @@ function launch(a, item, isRetry, snapP) {
     draftTimer = setTimeout(() => { draftTimer = null; broadcast('draft', { agent: a.id, text: visibleReply(r.draft).slice(-20000) }); }, 150);
   }
 
+  // Verbose view: display only. Mirrors events already coming from Claude Code to the browser;
+  // nothing here is saved, sent to Claude, or triggers another call.
+  let stepNo = 0;
+  const runTag = crypto.randomUUID().slice(0, 8);
+  const toolNames = {};
+  const blocks = {};
+  const flushTimers = new Map();
+  function traceStart(kind, fields) {
+    const t = { id: `${runTag}-${++stepNo}`, step: stepNo, ts: Date.now(), agent: a.id, kind, ...fields };
+    traceSend(t);
+    return t;
+  }
+  function traceSend(t) { if (clients.size) broadcast('trace', t); }
+  function traceSoon(t) {
+    if (flushTimers.has(t.id)) return;
+    flushTimers.set(t.id, setTimeout(() => { flushTimers.delete(t.id); traceSend(t); }, 150));
+  }
+  function traceDone(t) { clearTimeout(flushTimers.get(t.id)); flushTimers.delete(t.id); traceSend(t); }
+  const TRACE_CAP = 100000;
+  const clip = (s) => { s = String(s ?? ''); return s.length > TRACE_CAP ? s.slice(0, TRACE_CAP) + `\n… (${s.length - TRACE_CAP} more characters not shown)` : s; };
+
   function handle(line) {
     let ev;
     try { ev = JSON.parse(line); } catch { return; }
+    if (ev.type === 'stream_event' && ev.event) {
+      const e = ev.event;
+      if (e.type === 'message_start') { for (const k of Object.keys(blocks)) delete blocks[k]; }
+      if (e.type === 'content_block_start' && (e.content_block?.type === 'text' || e.content_block?.type === 'thinking')) {
+        blocks[e.index] = traceStart(e.content_block.type, { text: '', live: true });
+      }
+      if (e.type === 'content_block_delta' && blocks[e.index]) {
+        const d = e.delta?.text ?? e.delta?.thinking;
+        if (typeof d === 'string') { blocks[e.index].text += d; traceSoon(blocks[e.index]); }
+      }
+      if (e.type === 'content_block_stop' && blocks[e.index]) {
+        const b = blocks[e.index]; delete blocks[e.index];
+        b.live = false; b.text = clip(b.text); traceDone(b);
+      }
+    }
+    if (ev.type === 'user' && Array.isArray(ev.message?.content)) {
+      for (const c of ev.message.content) {
+        if (c.type !== 'tool_result') continue;
+        const body = Array.isArray(c.content) ? c.content.map((x) => x.text ?? (x.type === 'image' ? '[image]' : '')).join('\n') : c.content;
+        traceStart('result', { name: toolNames[c.tool_use_id] || 'tool', text: clip(body), isError: !!c.is_error });
+      }
+    }
     if (ev.session_id && (ev.type === 'system' || ev.type === 'result') && !ev.is_error) {
       if (state.sessions[a.id] !== ev.session_id) { state.sessions[a.id] = ev.session_id; saveState(); }
     }
@@ -822,6 +866,8 @@ function launch(a, item, isRetry, snapP) {
       for (const c of ev.message.content) {
         if (c.type === 'text' && c.text?.trim()) lastText = c.text;
         if (c.type === 'tool_use') {
+          toolNames[c.id] = c.name;
+          traceStart('tool', { name: c.name, input: clip(JSON.stringify(c.input ?? {}, null, 2)), summary: describeTool(c.name, c.input) });
           r.activity = describeTool(c.name, c.input);
           broadcastAgent(a);
           post({ kind: 'activity', from: a.id, text: r.activity });
@@ -923,20 +969,24 @@ ${state.carry[a.id]}]
     if (r.stopped) {
       post({ kind: 'system', text: `${a.name} was stopped.`, from: a.id, changes: changed || undefined });
     } else if (spawnError) {
+      traceStart('error', { text: `Couldn't start Claude Code: ${spawnError.message}` });
       post({ kind: 'error', from: a.id, text: `Couldn't start Claude Code (${CLAUDE}): ${spawnError.message}` });
     } else if (!result || result.isError) {
       const why = result?.text || stderr.trim() || `Claude Code exited with code ${code}.`;
       if (sessionId && !isRetry && /no conversation found|session/i.test(why)) {
         delete state.sessions[a.id];
         saveState();
+        traceStart('retry', { text: `Retrying with a fresh conversation. Reason: ${clip(why).slice(0, 300)}` });
         post({ kind: 'system', text: `${a.name} couldn't reopen its last conversation, so it's starting a fresh one.` });
         run(a, item, true);
         return;
       }
+      traceStart('error', { text: clip(why).slice(0, 2000) });
       const m = post({ kind: 'error', from: a.id, text: friendlyError(why), changes: changed || undefined });
       notifyPhone(a, m);
     } else {
       const delivered = deliverHandoffs(a, result.text, item.hop || 0);
+      for (const tid of delivered.targets) traceStart('handoff', { to: tid, text: `Hand-off to ${byId[tid]?.name || tid}` });
       const denials = resultEvents.flatMap((ev) => ev.permission_denials || []).map((d) => describeDenial(a, d)).filter(Boolean);
       const needs = String(summary?.needs_action || '').trim()
         || (denials.length ? `Needs your OK to ${denials.map((d) => d.label).join(', ')}` : '');

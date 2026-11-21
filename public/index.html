@@ -239,6 +239,19 @@
   .msg.err .bubble { border-color: var(--err); white-space: pre-wrap; }
   .activity { font-size: 12px; color: var(--muted); padding-left: 42px; font-family: ui-monospace, Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body:not(.show-activity) .activity { display: none; }
+  .trace { font-family: ui-monospace, Consolas, monospace; font-size: 12px; margin: 2px 0 2px 42px; padding: 4px 8px; border-left: 3px solid var(--line, #8884); background: #8881; border-radius: 4px; max-width: 900px; }
+  .trace[hidden] { display: none; }
+  .trace .th { color: var(--muted); display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
+  .trace .th b { color: inherit; }
+  .trace.k-tool { border-left-color: #4a90e2; }
+  .trace.k-result { border-left-color: #8884; }
+  .trace.k-thinking { border-left-color: #b07cd8; font-style: italic; }
+  .trace.k-error, .trace.k-result.bad { border-left-color: #e5534b; }
+  .trace.k-handoff, .trace.k-retry, .trace.k-steer { border-left-color: #d9a441; }
+  .trace pre { margin: 3px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; }
+  .trace details > summary { cursor: pointer; color: var(--muted); }
+  .trace .more { margin-top: 3px; font-size: 11px; cursor: pointer; }
+  #verBtn.on { background: var(--accent, #4a90e2); color: #fff; }
 
   /* extras under a message: attachments, approvals, changed files */
   .proceedBtn { justify-self: end; font-weight: 700; letter-spacing: .08em; }
@@ -427,12 +440,11 @@
   <button class="hbtn" id="moreBtn" title="More">⋯</button>
   <div id="hmore">
   <button class="hbtn on" id="updBtn" hidden></button>
-  <button class="hbtn" id="machBtn" title="Machines running Crew">🖥<span class="wide"> Machines</span></button>
-  <button class="hbtn" id="intBtn" title="What is linked and who can use it">🔌<span class="wide"> Integrations</span></button>
   <button class="hbtn" id="setBtn" title="Crew settings" hidden>🛠<span class="wide"> Settings</span></button>
   <button class="hbtn" id="schedBtn" title="Scheduled jobs">⏰<span class="wide"> Schedules</span></button>
   <button class="hbtn" id="ovBtn" title="Overview of the whole crew">📊<span class="wide"> Overview</span></button>
   <button class="hbtn" id="actBtn" title="Show what agents are doing step by step">⚙<span class="wide"> Activity</span></button>
+  <button class="hbtn" id="verBtn" title="Verbose: show every tool call, result and thinking step in this chat (display only)">🔍<span class="wide"> Verbose</span></button>
   <select class="hbtn" id="themeSel" title="Page theme"><option value="">🎨 Auto</option><option value="light">Light</option><option value="dark">Dark</option><option value="midnight">Midnight</option><option value="forest">Forest</option><option value="ocean">Ocean</option><option value="sunset">Sunset</option><option value="slate">Slate</option><option value="sepia">Sepia</option></select>
   <button class="hbtn" id="notifyBtn" title="Notifications">🔔</button>
   <a class="hbtn" id="signOut" href="#" hidden style="text-decoration:none">⎋<span class="wide"> Sign out</span></a>
@@ -476,14 +488,6 @@
 <dialog id="notesDlg">
   <div class="dlg-head"><h3 id="notesTitle">Notes</h3><button class="x" data-close>×</button></div>
   <div class="dlg-body" id="notesBody"></div>
-</dialog>
-<dialog id="machDlg">
-  <div class="dlg-head"><h3>Machines</h3><button class="x" data-close>×</button></div>
-  <div class="dlg-body" id="machBody"></div>
-</dialog>
-<dialog id="intDlg">
-  <div class="dlg-head"><h3>Integrations</h3><button class="x" data-close>×</button></div>
-  <div class="dlg-body" id="intBody"></div>
 </dialog>
 <dialog id="setDlg">
   <div class="dlg-head"><h3>Settings</h3><button class="x" data-close>×</button></div>
@@ -1226,6 +1230,7 @@
       render(m);
       if (document.hidden && !pushActive && m.from !== 'user' && (m.kind === 'chat' || m.kind === 'error')) notifyLocal(m);
     });
+    es.addEventListener('trace', (e) => { renderTrace(JSON.parse(e.data)); });
     es.addEventListener('draft', (e) => { const d = JSON.parse(e.data); renderDraft(d.agent, d.text); });
     es.addEventListener('usage', (e) => { usage = JSON.parse(e.data); renderUsage(); paintCachePills(); });
     es.addEventListener('flags', (e) => {
@@ -1249,7 +1254,7 @@
           <span class="small grow">${m.online ? esc(m.activity || 'online') : 'offline · last seen ' + when(m.lastSeen)}</span>
           ${m.hub ? '' : '<button class="btn" data-del>Remove</button>'}</div>
         <div class="small">${esc(m.os || '')}${m.version ? ' · Crew ' + esc(m.version) : ''}</div></div>`).join('');
-    $('#machBody').innerHTML = rows + `<div class="job"><div class="row"><b>Add a machine</b><span class="grow"></span><button class="btn primary" id="machPair">Get pairing code</button></div>
+    $('#setMach').innerHTML = rows + `<div class="job"><div class="row"><b>Add a machine</b><span class="grow"></span><button class="btn primary" id="machPair">Get pairing code</button></div>
         <div class="small" id="machCode">Press the button, then enter the code in the "Connect to a hub" box on the other computer's Crew. Codes last 10 minutes and work once.</div></div>
       <div class="job"><div class="row"><b>Connect this PC to a hub</b></div>
         ${link.url ? `<div class="row"><span class="small grow">Connected to ${esc(link.url)}</span><button class="btn" id="machLeave">Disconnect</button></div>`
@@ -1271,21 +1276,20 @@
       if (j.ok) renderMachines(); else $('#machMsg').textContent = '';
     };
     if ($('#machLeave')) $('#machLeave').onclick = async () => { if (confirm('Disconnect from the hub?')) { await api('/api/machines/disconnect'); renderMachines(); } };
-    $('#machBody').querySelectorAll('[data-del]').forEach((b) => {
+    $('#setMach').querySelectorAll('[data-del]').forEach((b) => {
       b.onclick = async () => { if (confirm('Remove this machine?')) { await api('/api/machines/remove', { id: b.closest('.job').dataset.id }); renderMachines(); } };
     });
   }
-  $('#machBtn').onclick = () => {
-    renderMachines(); open('#machDlg');
+  function startMachTimer() {
     clearInterval(machTimer);
-    machTimer = setInterval(() => { if ($('#machDlg').open && !$('#machCode').querySelector('b') && !$('#machDlg').contains(document.activeElement.closest('input') || null)) renderMachines(); else if (!$('#machDlg').open) clearInterval(machTimer); }, 15000);
-  };
+    machTimer = setInterval(() => { if (!$('#setDlg').open) clearInterval(machTimer); else if ($('#machCode') && !$('#machCode').querySelector('b') && !$('#setDlg').contains(document.activeElement.closest('input') || null)) renderMachines(); }, 15000);
+  }
 
   // ---------- integrations ----------
   async function renderIntegrations(force) {
-    $('#intBody').innerHTML = '<div class="small">Checking what is linked… (first load takes a few seconds)</div>';
+    $('#setInt').innerHTML = '<div class="small">Checking what is linked… (first load takes a few seconds)</div>';
     const r = await fetch('/api/integrations' + (force ? '?refresh=1' : ''));
-    if (!r.ok) { $('#intBody').textContent = 'Could not load.'; return; }
+    if (!r.ok) { $('#setInt').textContent = 'Could not load.'; return; }
     const d = await r.json();
     const dot = (s) => `<span style="color:${s === 'ok' ? '#4caf50' : s === 'auth' ? '#e0a030' : s === 'idle' ? '#888' : '#e05050'}">●</span>`;
     const who = (ids) => ids.length >= d.allAgents.length ? 'All agents' : ids.map((id) => esc(id)).join(', ');
@@ -1296,7 +1300,7 @@
       <div class="small">${esc(s.detail)}</div><div class="small">${esc(s.access)}</div></div>`).join('');
     const keys = d.keys.map((k) => `<div class="small">🔑 <b>${esc(k.name)}</b>${k.service ? ' · ' + esc(k.service) : ''}</div>`).join('')
       || '<div class="small">None found.</div>';
-    $('#intBody').innerHTML = `<div class="row"><span class="small grow">Checked ${when(d.builtAt)} · agents run in "${esc(d.permissionMode)}" mode</span><button class="btn" id="intRefresh">Refresh</button><button class="btn primary" id="intAdd">+ Add</button></div>
+    $('#setInt').innerHTML = `<div class="row"><span class="small grow">Checked ${when(d.builtAt)} · agents run in "${esc(d.permissionMode)}" mode</span><button class="btn" id="intRefresh">Refresh</button><button class="btn primary" id="intAdd">+ Add</button></div>
       <h4>Connected apps (MCP)</h4>${mcp}<h4>Services &amp; tasks</h4>${svc}
       <h4>API keys &amp; tokens on this PC</h4><div class="job">${keys}<div class="small">Names only. Any agent can read these from the shell.</div></div>`;
     $('#intRefresh').onclick = () => renderIntegrations(true);
@@ -1311,21 +1315,20 @@
     ['🧩', 'Something else', 'any MCP server, API or service', 'tell me what it is and I will work out the rest'],
   ];
   function renderIntegrationPicker() {
-    $('#intBody').innerHTML = `<div class="row"><b class="grow">What do you want to add?</b><button class="btn" id="intBack">Back</button></div>
+    $('#setInt').innerHTML = `<div class="row"><b class="grow">What do you want to add?</b><button class="btn" id="intBack">Back</button></div>
       <div class="small">Pick one and I will walk you through exactly what is needed, one step at a time. Secrets are never shown back in chat.</div>`
       + INT_CATALOG.map((c, i) => `<div class="job" data-i="${i}" style="cursor:pointer"><div class="row"><b>${c[0]} ${esc(c[1])}</b><span class="small grow">${esc(c[2])}</span></div></div>`).join('');
     $('#intBack').onclick = () => renderIntegrations(false);
-    $('#intBody').querySelectorAll('[data-i]').forEach((el) => {
+    $('#setInt').querySelectorAll('[data-i]').forEach((el) => {
       el.onclick = async () => {
         const c = INT_CATALOG[+el.dataset.i];
         const text = `@assistant Walk me through adding the "${c[1]}" integration (${c[2]}). Typically that needs: ${c[3]}. First check whether it is already set up here. Then ask me for the pieces one at a time, tell me exactly where to click to get each one, never echo secrets back, and when I have given you everything, set it up, test it, and confirm what is linked and which agents can use it.`;
-        $('#intDlg').close();
+        $('#setDlg').close();
         const r = await api('/api/send', { text, attachments: [] });
         if (!r) return;
       };
     });
   }
-  $('#intBtn').onclick = () => { renderIntegrations(false); open('#intDlg'); };
 
   // ---------- schedules ----------
   const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1545,7 +1548,58 @@
     $('#selMention').hidden = ids.length !== 1;
     $('#input').placeholder = ids.length ? 'Message ' + ids.map(nameOf).join(' + ') + '…' : 'Message the crew…';
     ids.forEach((id) => { unread[id] = 0; }); paintUnread();
+    paintVerbose();
     scroller.scrollTop = scroller.scrollHeight;
+  }
+  // ---------- verbose (display only; per chat, saved as a pref, default off) ----------
+  const verKey = () => 'crew-verbose-' + (sel ? sel.replace(/[^\w-]/g, '_') : 'all');
+  const verboseOn = () => store.get(verKey()) === '1';
+  const traces = new Map(); // id -> { t, el }
+  function traceShown(t) { return verboseOn() && (!sel || selIds().includes(t.agent)); }
+  function paintVerbose() {
+    $('#verBtn').classList.toggle('on', verboseOn());
+    traces.forEach(({ t, el }) => { el.hidden = !traceShown(t); });
+  }
+  $('#verBtn').onclick = () => { store.set(verKey(), verboseOn() ? '0' : '1'); paintVerbose(); scroller.scrollTop = scroller.scrollHeight; };
+  const clock = (ts) => { const d = new Date(ts); return d.toLocaleTimeString([], { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0'); };
+  const LIMIT = 2000;
+  function fillBody(box, text) {
+    box.innerHTML = '';
+    const pre = document.createElement('pre');
+    box.appendChild(pre);
+    if (text.length <= LIMIT) { pre.textContent = text; return; }
+    pre.textContent = text.slice(0, LIMIT) + '…';
+    const more = document.createElement('div');
+    more.className = 'more'; more.innerHTML = `<a href="#">show all (${text.length.toLocaleString()} characters)</a>`;
+    more.querySelector('a').onclick = (e) => { e.preventDefault(); pre.textContent = text; more.remove(); };
+    box.appendChild(more);
+  }
+  function renderTrace(t) {
+    let x = traces.get(t.id);
+    const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 160;
+    if (!x) {
+      const el = document.createElement('div');
+      el.className = `trace k-${t.kind}${t.isError ? ' bad' : ''}`;
+      const label = { tool: 'Tool', result: 'Result', thinking: 'Thinking', text: 'Text', handoff: 'Hand-off', retry: 'Retry', error: 'Error', steer: 'Follow-up' }[t.kind] || t.kind;
+      const what = t.kind === 'tool' || t.kind === 'result' ? ` · ${esc(t.name)}` : '';
+      el.innerHTML = `<div class="th"><span>#${t.step}</span><span>${clock(t.ts)}</span><b>${esc(nameOf(t.agent))} · ${label}${what}</b>${t.kind === 'tool' ? `<span>${esc(t.summary || '')}</span>` : ''}</div><div class="tb"></div>`;
+      if (t.kind === 'result') {
+        const d = document.createElement('details');
+        d.innerHTML = `<summary>${t.text.length.toLocaleString()} characters${t.isError ? ' (error)' : ''}</summary><div class="rb"></div>`;
+        el.querySelector('.tb').appendChild(d);
+        x = { t, el, body: d.querySelector('.rb') };
+      } else x = { t, el, body: el.querySelector('.tb') };
+      x.set = false;
+      traces.set(t.id, x);
+      const draftFirst = [...drafts.values()][0];
+      if (draftFirst) $('#log').insertBefore(el, draftFirst); else $('#log').appendChild(el);
+      while (traces.size > 1500) { const [k, v] = traces.entries().next().value; v.el.remove(); traces.delete(k); }
+    }
+    x.t = t;
+    const text = t.kind === 'tool' ? t.input : t.text;
+    if (text !== x.last) { x.last = text; fillBody(x.body, text || ''); }
+    x.el.hidden = !traceShown(t);
+    if (nearBottom && !x.el.hidden) scroller.scrollTop = scroller.scrollHeight;
   }
   function paintUnread() {
     document.querySelectorAll('.agent').forEach((e) => {
@@ -1686,7 +1740,9 @@
       </div></div>
       <div class="section"><h5>Crew members</h5><div id="sAgents" style="display:grid;gap:10px">${cfg.agents.map(agentCard).join('')}</div>
         <div class="row" style="margin-top:8px"><button class="btn" id="sAddAgent" type="button">+ Add agent</button></div></div>
-      <div class="small">Cloudflare and machine pairing are not editable here; they stay in crew.config.json (pair machines from the Machines button). A backup is saved as crew.config.json.bak.</div>
+      <div class="section"><h5>🖥 Machines</h5><div id="setMach"></div></div>
+      <div class="section"><h5>🔌 Integrations</h5><div id="setInt"></div></div>
+      <div class="small">Cloudflare and machine pairing are not editable here; they stay in crew.config.json. A backup is saved as crew.config.json.bak.</div>
       <div class="setfoot row"><button class="btn primary" id="sSave" type="button">Save</button><button class="btn" id="sSaveRs" type="button">Save and restart</button><span class="small grow" id="sMsg"></span></div>`;
     const wire = (card) => { card.querySelector('[data-rm]').onclick = () => { if ($('#sAgents').children.length > 1) { card.remove(); syncDefault(); } }; };
     const syncDefault = () => {
@@ -1719,7 +1775,7 @@
     };
     $('#sSave').onclick = () => save(false);
     $('#sSaveRs').onclick = () => save(true);
-    
+    renderMachines(); startMachTimer(); renderIntegrations(false);
   }
   $('#setBtn').onclick = async () => {
     const r = await fetch('/api/config');
