@@ -97,6 +97,8 @@
       <h2>Prerequisites</h2>
       <p class="lead">Crew needs Node.js 20+, git, and the Claude CLI signed in with a paid Claude plan.</p>
       <div class="scard" id="prereqList"></div>
+      <div id="prereqConsent" hidden class="warnbox" style="margin-top:12px"></div>
+      <div class="log" id="prereqLog" hidden></div>
     </section>
     <section class="page" data-id="source" hidden>
       <h2>Choose source</h2>
@@ -154,6 +156,11 @@
       <div class="scard" id="switchCard"></div>
       <div id="switchWarn"></div>
     </section>
+    <section class="page" data-id="uscan" hidden>
+      <h2>What we found</h2>
+      <p class="lead">Everything below looks like a Claude Crew install or leftover. Items outside your user profile are unchecked. External project folders are never deleted.</p>
+      <div id="scanList">Scanning…</div>
+    </section>
     <section class="page" data-id="udata" hidden>
       <h2>Your data</h2>
       <p class="lead">Choose what happens to <span class="mono">data/</span>, <span class="mono">crew.config.json</span>, summaries and agent workspaces inside the install folder. External project folders are never deleted.</p>
@@ -191,18 +198,18 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { defs: null, prereqs: null, skipLogin: false, folder: null, sourceKind: 'hast3', port: 7777, preview: null };
+const state = { defs: null, prereqs: null, skipLogin: false, folder: null, sourceKind: 'hast3', port: 7777, preview: null, scan: null, pollLogin: null };
 const FLOWS = {
   install: ['prereqs','source','folder','options','install','done'],
   repair: ['prereqs','options','install','done'],
   switch: ['switch'],
-  uninstall: ['udata','confirm','unprogress','undone'],
+  uninstall: ['uscan','udata','confirm','unprogress','undone'],
   existing: ['mode'],
 };
 let flow = 'install', step = 0;
 
 function titles() {
-  return { prereqs:'Prerequisites', source:'Source', folder:'Folder', options:'Options', install:'Install', done:'Done', mode:'This copy', switch:'Switch source', udata:'Your data', confirm:'Confirm', unprogress:'Uninstall', undone:'Done' };
+  return { prereqs:'Prerequisites', source:'Source', folder:'Folder', options:'Options', install:'Install', done:'Done', mode:'This copy', switch:'Switch source', uscan:'Scan', udata:'Your data', confirm:'Confirm', unprogress:'Uninstall', undone:'Done' };
 }
 
 async function api(path, body) {
@@ -235,6 +242,7 @@ function show() {
   if (id === 'source') drawSource();
   if (id === 'folder') checkFolder();
   if (id === 'options') drawPerm();
+  if (id === 'uscan') loadScan();
   if (id === 'udata') loadPreview();
   if (id === 'confirm') drawConfirm();
   if (id === 'switch') loadSwitch();
@@ -273,27 +281,103 @@ function source() {
   return { kind, url: kind === 'custom' ? $('customUrl').value.trim() : (preset?.url || ''), branch: $('branchSel').value.trim() };
 }
 
-async function drawPrereqs() {
+function prereqBtn(id, label) {
+  return ' · <button type="button" class="btn" data-prereq="'+id+'" style="padding:2px 8px">'+label+'</button>';
+}
+async function streamPrereqInstall(kind) {
+  const log = $('prereqLog');
+  log.hidden = false;
+  log.textContent = '';
+  const res = await fetch('/api/prereqs/install', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ kind }) });
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', last = {};
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n'); buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const ev = JSON.parse(line);
+        if (ev.line) { log.textContent += ev.line + (ev.line.endsWith('\n') ? '' : '\n'); log.scrollTop = log.scrollHeight; }
+        last = ev;
+      } catch { log.textContent += line + '\n'; }
+    }
+  }
+  if (last.prereqs) state.prereqs = last.prereqs;
+  await drawPrereqs(false);
+  return last;
+}
+function askConsent(kind, spec) {
+  const box = $('prereqConsent');
+  box.hidden = false;
+  box.innerHTML = '<b>Run this official command?</b><p class="mono" style="margin:6px 0">'+esc(spec.commandText||'')+'</p>'
+    + (spec.docs ? '<p>Source: <a href="'+esc(spec.docs)+'" target="_blank" rel="noopener">'+esc(spec.docs)+'</a></p>' : '')
+    + '<button type="button" class="btn primary" id="consentGo">Install</button> '
+    + '<button type="button" class="btn" id="consentCancel">Cancel</button>';
+  return new Promise((resolve) => {
+    $('consentGo').onclick = () => { box.hidden = true; resolve(true); };
+    $('consentCancel').onclick = () => { box.hidden = true; resolve(false); };
+  });
+}
+async function drawPrereqs(fetchNow = true) {
   const box = $('prereqList');
-  box.innerHTML = '<div class="check"><div class="dot warn">…</div><div>Checking…</div></div>';
-  const p = await api('/api/prereqs');
-  state.prereqs = p;
+  if (fetchNow) {
+    box.innerHTML = '<div class="check"><div class="dot warn">…</div><div>Checking…</div></div>';
+    const p = await api('/api/prereqs');
+    state.prereqs = p;
+  }
+  const p = state.prereqs || {};
+  const cmds = p.commands || {};
+  const win = p.platform === 'win32' || cmds.claude?.available;
   const rows = [
-    ['Node.js 20+', p.node, 'https://nodejs.org', 'Download Node.js LTS'],
-    ['git', p.git, 'https://git-scm.com/download/win', 'Download Git for Windows'],
-    ['Claude CLI installed', p.claude, 'https://docs.claude.com/en/docs/claude-code/setup', 'Claude Code setup'],
-    ['Claude CLI logged in', p.login, 'https://claude.ai', 'Open claude.ai'],
+    { name:'Node.js 20+', s:p.node, href:'https://nodejs.org', link:'Download Node.js LTS', kind:'node', install:'Install Node.js LTS' },
+    { name:'git', s:p.git, href:'https://git-scm.com/download/win', link:'Download Git for Windows', kind:'git', install:'Install Git' },
+    { name:'Claude CLI installed', s:p.claude, href:(cmds.claude&&cmds.claude.docs)||'https://code.claude.com/docs/en/quickstart', link:'Claude Code setup', kind:'claude', install:'Install Claude CLI' },
+    { name:'Claude CLI logged in', s:p.login, href:'https://claude.ai', link:'Open claude.ai', kind:'login' },
   ];
-  box.innerHTML = rows.map(([name, s, href, label], i) => {
-    const st = s?.ok ? 'ok' : (name.includes('logged') && p.claude?.ok ? 'warn' : 'miss');
+  box.innerHTML = rows.map((row) => {
+    const logged = row.kind === 'login';
+    const st = row.s?.ok ? 'ok' : (logged && p.claude?.ok ? 'warn' : 'miss');
     const icon = st === 'ok' ? '✓' : (st === 'warn' ? '?' : '!');
-    let extra = s?.text || '';
-    if (!s?.ok) extra += ' · <a href="'+href+'" target="_blank" rel="noopener">'+label+'</a>';
-    if (i === 3 && p.claude?.ok && !s?.ok) extra += ' · <button type="button" class="btn" id="signInBtn" style="padding:2px 8px">Open sign-in</button>';
-    return '<div class="check"><div class="dot '+st+'">'+icon+'</div><div class="l"><b>'+name+'</b><p>'+extra+'</p></div></div>';
+    let extra = row.s?.text || '';
+    const spec = row.kind === 'login' ? cmds.login : cmds[row.kind];
+    if (!row.s?.ok) extra += ' · <a href="'+row.href+'" target="_blank" rel="noopener">'+row.link+'</a>';
+    if (!row.s?.ok && row.kind !== 'login' && spec) {
+      extra += prereqBtn(row.kind, row.install);
+      if (spec.commandText) extra += '<div class="mono" style="margin-top:4px;color:var(--muted)">'+esc(spec.commandText)+'</div>';
+    }
+    if (logged && p.claude?.ok && !row.s?.ok) extra += prereqBtn('login', 'Sign in');
+    return '<div class="check"><div class="dot '+st+'">'+icon+'</div><div class="l"><b>'+row.name+'</b><p>'+extra+'</p></div></div>';
   }).join('');
-  const btn = $('signInBtn');
-  if (btn) btn.onclick = async () => { await api('/api/claude-login', {}); };
+  box.querySelectorAll('[data-prereq]').forEach((btn) => {
+    btn.onclick = async () => {
+      const kind = btn.getAttribute('data-prereq');
+      if (kind === 'login') {
+        const launched = await api('/api/prereqs/login', {});
+        const log = $('prereqLog');
+        log.hidden = false;
+        log.textContent = (launched.spec && launched.spec.commandText ? 'Launched: '+launched.spec.commandText+'\n' : '') + (launched.error || 'A new terminal window should have opened. Sign in there; this page will re-check when you come back, or click Check again.');
+        if (state.pollLogin) clearInterval(state.pollLogin);
+        let n = 0;
+        state.pollLogin = setInterval(async () => {
+          n++;
+          const next = await api('/api/prereqs');
+          state.prereqs = next;
+          if (next.login && next.login.ok) { clearInterval(state.pollLogin); state.pollLogin = null; }
+          await drawPrereqs(false);
+          if (n > 60) { clearInterval(state.pollLogin); state.pollLogin = null; }
+        }, 4000);
+        return;
+      }
+      const spec = cmds[kind] || {};
+      if (!(await askConsent(kind, spec))) return;
+      btn.disabled = true;
+      await streamPrereqInstall(kind);
+    };
+  });
   setFoot();
 }
 
@@ -421,30 +505,55 @@ async function doSwitch() {
   else { $('switchWarn').className = 'errbox'; $('switchWarn').textContent = j.error || 'Switch failed'; }
 }
 
+function selectedScanIds() {
+  return [...document.querySelectorAll('#scanList input[type=checkbox][data-id]:checked')].map((el) => el.getAttribute('data-id'));
+}
+function renderScanGroup(title, items, line) {
+  if (!items || !items.length) return '';
+  return '<div class="ssh"><h4>'+esc(title)+' ('+items.length+')</h4></div><div class="scard">'+items.map((it) => {
+    const note = it.outsideProfile ? ' <span class="mono" style="color:var(--muted)">outside your user profile</span>' : (it.readOnly ? ' <span class="mono" style="color:var(--muted)">read-only check</span>' : '');
+    return '<label class="srow" style="cursor:pointer"><input type="checkbox" data-id="'+esc(it.id)+'" '+(it.defaultChecked?'checked':'')+'> <div class="l"><b>'+esc(line(it))+'</b><p>'+esc(it.reason||'')+note+'</p></div></label>';
+  }).join('')+'</div>';
+}
+async function loadScan() {
+  const box = $('scanList');
+  box.textContent = 'Scanning for Crew installs and leftovers…';
+  const j = await fetch('/api/uninstall/scan').then(r=>r.json()).catch((e) => ({ error: e.message }));
+  state.scan = j;
+  if (j.error) { box.innerHTML = '<div class="errbox">'+esc(j.error)+'</div>'; return; }
+  const g = j.groups || {};
+  box.innerHTML = renderScanGroup('Folders', g.folders, (i) => i.path)
+    + renderScanGroup('Processes', g.processes, (i) => 'PID '+i.pid+' '+ (i.name||'') )
+    + renderScanGroup('Tray', g.tray, (i) => 'Tray PID '+i.pid)
+    + renderScanGroup('Shortcuts', g.shortcuts, (i) => (i.kind||'shortcut')+': '+(i.path||''))
+    + renderScanGroup('Scheduled tasks', g.scheduledTasks, (i) => i.name)
+    + renderScanGroup('Run / RunOnce keys', g.runKeys, (i) => (i.hive||'')+' '+i.name)
+    + (!j.items || !j.items.length ? '<p class="lead">No Crew installs or leftovers were found.</p>' : '');
+  setFoot();
+}
 async function loadPreview() {
   const mode = document.querySelector('input[name="dataMode"]:checked')?.value || 'backup';
-  const j = await fetch('/api/uninstall/preview?dir='+encodeURIComponent(state.defs.dir)+'&dataMode='+mode).then(r=>r.json());
+  const j = await api('/api/uninstall/preview', { dir: state.defs.dir, dataMode: mode, selectedIds: selectedScanIds(), scan: state.scan });
   state.preview = j;
-  $('backupPath').textContent = j.backupPath ? ('Backup file: ' + j.backupPath) : (mode === 'keep' ? 'User data will stay in the install folder.' : 'No backup will be written.');
+  $('backupPath').textContent = j.backupPath ? ('Backup file: ' + j.backupPath) : (mode === 'keep' ? 'User data will stay in the install folders you keep data in.' : 'No backup will be written.');
 }
 async function drawConfirm() {
   await loadPreview();
-  const j = state.preview;
-  const items = (j.willDelete||[]).filter(d => d.rel !== '.').map(d => '<li>'+esc(d.rel)+(d.safe===false?' (skipped: '+esc(d.reason)+')':'')+'</li>').join('');
-  const arts = (j.artifacts||[]).map(a => '<li>'+esc(a.type)+(a.path?': '+esc(a.path):a.name?': '+esc(a.name):'')+(a.detect?' (if present)':'')+'</li>').join('');
-  $('deleteList').innerHTML = '<div class="errbox"><b>Will be deleted inside '+esc(j.installDir)+'</b><ul class="filelist">'+items+'</ul>'
-    + (arts ? '<b>Shortcuts and autostart</b><ul class="filelist">'+arts+'</ul>' : '')
+  const j = state.preview || {};
+  const items = (j.willDelete||[]).filter(d => d.rel !== '.').map(d => '<li>'+esc(d.rel || d.path || '')+(d.installDir?'  ('+esc(pathBase(d.installDir))+')':'')+(d.safe===false?' (skipped: '+esc(d.reason)+')':'')+'</li>').join('');
+  $('deleteList').innerHTML = '<div class="errbox"><b>Will be deleted</b><ul class="filelist">'+items+'</ul>'
     + (j.backupPath ? '<p>A backup will be written first to <span class="mono">'+esc(j.backupPath)+'</span>.</p>' : '')
-    + (j.willKeep?.length ? '<p>Kept: '+(j.willKeep.map(u=>u.rel).join(', '))+'</p>' : '')
+    + (j.skipped?.length ? '<p>Skipped: '+j.skipped.map(s=>esc(s.path||s.reason)).join('; ')+'</p>' : '')
     + '</div>';
   setFoot();
 }
+function pathBase(p) { const s=String(p||''); const i=Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\\\')); return i>=0?s.slice(i+1):s; }
 async function runUninstall() {
   show();
   const log = $('unLog');
   log.textContent = 'Working…\n';
   const mode = document.querySelector('input[name="dataMode"]:checked')?.value || 'backup';
-  const j = await api('/api/uninstall', { dir: state.defs.dir, dataMode: mode, backupPath: state.preview?.backupPath, dryRun: false });
+  const j = await api('/api/uninstall', { dir: state.defs.dir, dataMode: mode, backupPath: state.preview?.backupPath, dryRun: false, selectedIds: selectedScanIds(), scan: state.scan });
   if (j.ok) {
     log.textContent = (j.actions||[]).map(a => (a.action||'') + (a.path?('  '+a.path):'')).join('\n');
     $('undoneLead').innerHTML = (j.backup && j.backup.path) ? ('A backup is at <span class="mono">'+esc(j.backup.path)+'</span>.') : 'No backup was written.';

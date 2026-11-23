@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Prerequisites can install the official Claude CLI (`irm https://claude.ai/install.ps1 | iex`, from https://code.claude.com/docs/en/quickstart), Git, and Node.js LTS with live output and a re-check. Sign-in opens a visible terminal. Continue without signing in remains available.
+- Uninstall now scans for every Crew install and leftover (processes, tray, shortcuts, scheduled tasks, Run keys, and known folders), with a checkbox list, a read-only `uninstall.cmd --scan --json` / `node scripts/crew-scan.js --json` mode, and a self-delete handoff when removing the running copy.
+
 - Setup wizard (`setup.cmd`) replaces `INSTALL.bat` / `install.ps1`. Installs are always a git clone (never a ZIP). Default source is hast3/claudecrew `main`; Hrubak/claudecrew `crew-mods` is a preset. Optional autostart is off by default.
 - Folder picker (Browse…) and path checks: block Downloads, temp, and ZIP extracts; warn if the folder is not empty; confirm it is writable.
 - Settings > General: Switch source (never discards uncommitted work) and an Uninstall danger zone. `uninstall.cmd` backs up user data by default to a zip outside the install folder.

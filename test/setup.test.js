@@ -209,3 +209,74 @@ describe('switch source', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('prereq command building', () => {
+  test('uses the official Windows Claude CLI installer command and docs URL', () => {
+    const spec = setup.prereqInstallSpec('claude', { platform: 'win32' });
+    assert.equal(setup.OFFICIAL_CLAUDE_WINDOWS_INSTALL, 'irm https://claude.ai/install.ps1 | iex');
+    assert.equal(setup.OFFICIAL_CLAUDE_WINDOWS_DOCS, 'https://code.claude.com/docs/en/quickstart');
+    assert.equal(spec.commandText, 'irm https://claude.ai/install.ps1 | iex');
+    assert.equal(spec.docs, 'https://code.claude.com/docs/en/quickstart');
+    assert.equal(spec.file, 'powershell.exe');
+    assert.deepEqual(spec.args, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://claude.ai/install.ps1 | iex']);
+    assert.equal(spec.available, true);
+    assert.ok(spec.args.every((a) => typeof a === 'string'));
+  });
+
+  test('git and Node use winget ids Git.Git and OpenJS.NodeJS.LTS as argv arrays', () => {
+    const git = setup.prereqInstallSpec('git', { platform: 'win32' });
+    const node = setup.prereqInstallSpec('node', { platform: 'win32' });
+    assert.equal(git.commandText, 'winget install --id Git.Git -e');
+    assert.equal(git.file, 'winget');
+    assert.equal(git.args[0], 'install');
+    assert.ok(git.args.includes('Git.Git'));
+    assert.ok(git.args.includes('-e'));
+    assert.equal(node.commandText, 'winget install --id OpenJS.NodeJS.LTS -e');
+    assert.ok(node.args.includes('OpenJS.NodeJS.LTS'));
+    assert.ok(!git.args.some((a) => a.includes('${') || a.includes('`')));
+  });
+
+  test('prereq install and login are not available off Windows', () => {
+    assert.equal(setup.prereqInstallSpec('claude', { platform: 'linux' }).available, false);
+    assert.equal(setup.prereqInstallSpec('git', { platform: 'darwin' }).available, false);
+    assert.equal(setup.claudeLoginSpec({ platform: 'linux' }).available, false);
+  });
+
+  test('sign-in launches a visible cmd /k claude window via argv, not a shell string', () => {
+    const spec = setup.claudeLoginSpec({ platform: 'win32', claudeCmd: 'claude' });
+    assert.equal(spec.file, 'cmd.exe');
+    assert.deepEqual(spec.args, ['/c', 'start', '', 'cmd.exe', '/k', 'claude']);
+    assert.equal(spec.visible, true);
+    const calls = [];
+    const launched = setup.launchClaudeLogin({
+      platform: 'win32',
+      claudeCmd: 'claude',
+      spawnFn: (file, args, opts) => {
+        calls.push({ file, args, opts });
+        return { pid: 1, unref() {} };
+      },
+    });
+    assert.equal(launched.ok, true);
+    assert.equal(calls[0].file, 'cmd.exe');
+    assert.deepEqual(calls[0].args, spec.args);
+    assert.equal(calls[0].opts.windowsHide, false);
+  });
+
+  test('runPrereqInstall spawns the official argv and does not interpolate user input', async () => {
+    const calls = [];
+    const spawnFn = (file, args) => {
+      calls.push({ file, args });
+      const ev = new (require('events'))();
+      ev.stdout = new (require('stream').PassThrough)();
+      ev.stderr = new (require('stream').PassThrough)();
+      setImmediate(() => { ev.stdout.end('ok\n'); ev.stderr.end(''); ev.emit('close', 0); });
+      ev.on = ev.on.bind(ev);
+      ev.kill = () => {};
+      return ev;
+    };
+    const result = await setup.runPrereqInstall('claude', { platform: 'win32', spawnFn, env: { ...process.env } });
+    assert.equal(result.ok, true);
+    assert.equal(calls[0].file, 'powershell.exe');
+    assert.ok(calls[0].args.includes('irm https://claude.ai/install.ps1 | iex'));
+  });
+});

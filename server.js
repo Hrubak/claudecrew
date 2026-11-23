@@ -19,6 +19,7 @@ const { createIntegrations } = require('./lib/integrations');
 const { createPresence, startClient, pairOnce } = require('./lib/presence');
 const setup = require('./lib/setup');
 const uninstall = require('./lib/uninstall');
+const scan = require('./lib/scan');
 
 const ROOT = __dirname;
 // Paths can be moved with environment variables; relative values resolve against this folder.
@@ -1386,10 +1387,19 @@ function makeHandler(entrance) {
         if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Source can only be viewed from the PC Crew runs on.' });
         return send(res, 200, await setup.sourceStatus(ROOT));
       }
+      if (req.method === 'GET' && url.pathname === '/api/uninstall/scan') {
+        if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Uninstall can only be started from the PC Crew runs on.' });
+        try {
+          return send(res, 200, await scan.scanCrew({ currentDir: ROOT, extraDirs: [ROOT], scriptPath: path.join(ROOT, 'scan-inventory.ps1') }));
+        } catch (err) { return send(res, 400, { error: err.message }); }
+      }
       if (req.method === 'GET' && url.pathname === '/api/uninstall/preview') {
         if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Uninstall can only be started from the PC Crew runs on.' });
-        try { return send(res, 200, uninstall.previewUninstall(ROOT, { dataMode: url.searchParams.get('dataMode') || 'backup' })); }
-        catch (err) { return send(res, 400, { error: err.message }); }
+        try {
+          const scanResult = await scan.scanCrew({ currentDir: ROOT, extraDirs: [ROOT], scriptPath: path.join(ROOT, 'scan-inventory.ps1') });
+          const ids = (url.searchParams.get('selectedIds') || '').split(',').filter(Boolean);
+          return send(res, 200, uninstall.previewScanUninstall(scanResult, { selectedIds: ids.length ? ids : undefined, dataMode: url.searchParams.get('dataMode') || 'backup' }));
+        } catch (err) { return send(res, 400, { error: err.message }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/machines') {
         presence.setActivity(busyCount() ? `${busyCount()} agent${busyCount() > 1 ? 's' : ''} working` : 'idle');
@@ -1514,26 +1524,27 @@ function makeHandler(entrance) {
         if (url.pathname === '/api/uninstall' && !viaCloudflare && isLocal(req)) {
           try {
             const dataMode = body.dataMode || 'backup';
-            const preview = uninstall.previewUninstall(ROOT, { dataMode });
+            const scanResult = body.scan || await scan.scanCrew({ currentDir: ROOT, extraDirs: [ROOT], scriptPath: path.join(ROOT, 'scan-inventory.ps1') });
+            const preview = uninstall.previewScanUninstall(scanResult, { selectedIds: body.selectedIds, dataMode });
             if (body.dryRun) {
-              const result = await uninstall.runUninstall({ installDir: ROOT, dataMode, dryRun: true, backupPath: body.backupPath || preview.backupPath });
+              const result = await uninstall.runScanUninstall({ scanResult, selectedIds: body.selectedIds, dataMode, dryRun: true, backupPath: body.backupPath || preview.backupPath, sourceRoot: ROOT });
               return send(res, 200, result);
             }
-            // Backup first while this process is still running, then hand off deletion
-            // to a detached setup-wizard so we don't delete our own files mid-request.
             let backup = null;
             if (dataMode === 'backup' && preview.userData.length) {
-              backup = await uninstall.createBackupZip(ROOT, body.backupPath || preview.backupPath, preview.userData);
+              backup = await uninstall.backupMany(preview.userData, body.backupPath || preview.backupPath);
             }
-            const planPath = path.join(DATA_DIR, 'uninstall-plan.json');
+            const copied = uninstall.copyUninstallerToTemp({ sourceRoot: ROOT });
+            const planPath = path.join(copied.dir, 'uninstall-plan.json');
             fs.writeFileSync(planPath, JSON.stringify({
-              installDir: ROOT, dataMode, backupPath: backup && backup.path, waitForPid: process.pid, createdAt: new Date().toISOString(),
+              scanResult, selectedIds: body.selectedIds, dataMode, backupPath: (backup && backup.path) || body.backupPath || preview.backupPath,
+              waitForPid: process.pid, createdAt: new Date().toISOString(),
             }, null, 2));
-            const child = spawn(process.execPath, [path.join(ROOT, 'setup-wizard.js'), '--exec-plan', '--plan', planPath, '--dir', ROOT], {
-              detached: true, stdio: 'ignore', cwd: ROOT,
+            const child = spawn(process.execPath, [path.join(copied.dir, 'setup-wizard.js'), '--exec-plan', '--plan', planPath], {
+              detached: true, stdio: 'ignore', cwd: copied.dir,
             });
             child.unref();
-            send(res, 200, { ok: true, handedOff: true, backup, planPath, preview });
+            send(res, 200, { ok: true, handedOff: true, backup, planPath, preview, tempDir: copied.dir });
             for (const a of agents) stopAgent(a.id);
             setTimeout(() => process.exit(0), 1500);
           } catch (err) {

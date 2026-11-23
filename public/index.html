@@ -1864,26 +1864,45 @@
       };
 
       const unOpen = $('#unOpen'), unPanel = $('#unPanel'), unGo = $('#unGo');
+      const selectedUnIds = () => [...unPanel.querySelectorAll('input[type=checkbox][data-id]:checked')].map((el) => el.getAttribute('data-id'));
+      const renderGrp = (title, items, line) => {
+        if (!items || !items.length) return '';
+        return '<div class="sub">' + esc(title) + '</div>' + items.map((it) => '<label class="srow" style="cursor:pointer"><input type="checkbox" data-id="' + esc(it.id) + '" ' + (it.defaultChecked ? 'checked' : '') + '> <div class="l"><b>' + esc(line(it)) + '</b><p>' + esc(it.reason || '') + (it.outsideProfile ? ' Outside your user profile (unchecked).' : '') + '</p></div></label>').join('');
+      };
+      let unScan = null;
       const refreshUn = async () => {
-        const mode = $('#unMode').value;
-        const prev = await fetch('/api/uninstall/preview?dataMode=' + encodeURIComponent(mode)).then((r) => r.json()).catch((e) => ({ error: e.message }));
+        if (!unScan) unScan = await fetch('/api/uninstall/scan').then((r) => r.json()).catch((e) => ({ error: e.message }));
+        const box = $('#unScanList');
+        if (unScan.error) box.innerHTML = '<div class="errbox">' + esc(unScan.error) + '</div>';
+        else if (!box.dataset.filled) {
+          const g = unScan.groups || {};
+          box.innerHTML = renderGrp('Folders', g.folders, (i) => i.path)
+            + renderGrp('Processes', g.processes, (i) => 'PID ' + i.pid + ' ' + (i.name || ''))
+            + renderGrp('Tray', g.tray, (i) => 'Tray PID ' + i.pid)
+            + renderGrp('Shortcuts', g.shortcuts, (i) => (i.path || ''))
+            + renderGrp('Scheduled tasks', g.scheduledTasks, (i) => i.name)
+            + renderGrp('Run / RunOnce keys', g.runKeys, (i) => (i.hive || '') + ' ' + i.name);
+          box.dataset.filled = '1';
+        }
+        const ids = selectedUnIds();
+        const prev = await fetch('/api/uninstall/preview?dataMode=' + encodeURIComponent($('#unMode').value) + (ids.length ? '&selectedIds=' + encodeURIComponent(ids.join(',')) : '')).then((r) => r.json()).catch((e) => ({ error: e.message }));
         const list = $('#unList');
         list.hidden = false;
         if (prev.error) { list.className = 'errbox'; list.textContent = prev.error; return prev; }
-        const dels = (prev.willDelete || []).filter((d) => d.rel !== '.').map((d) => '<li>' + esc(d.rel) + '</li>').join('');
-        const arts = (prev.artifacts || []).map((a) => '<li>' + esc(a.type) + (a.path ? ': ' + esc(a.path) : a.name ? ': ' + esc(a.name) : '') + (a.detect ? ' (if present)' : '') + '</li>').join('');
+        const dels = (prev.willDelete || []).filter((d) => d.rel !== '.').map((d) => '<li>' + esc(d.rel || d.path || '') + '</li>').join('');
         list.className = 'errbox';
-        list.innerHTML = '<b>Will be deleted</b><ul class="filelist">' + dels + '</ul>' + (arts ? '<b>Shortcuts and autostart</b><ul class="filelist">' + arts + '</ul>' : '') + (prev.backupPath ? '<p>Backup: <span class="mono">' + esc(prev.backupPath) + '</span></p>' : '');
+        list.innerHTML = '<b>Will be deleted</b><ul class="filelist">' + dels + '</ul>' + (prev.backupPath ? '<p>Backup: <span class="mono">' + esc(prev.backupPath) + '</span></p>' : '');
         return prev;
       };
       unOpen.onclick = async () => { unPanel.hidden = false; unOpen.disabled = true; await refreshUn(); };
       $('#unMode').onchange = refreshUn;
+      $('#unScanList').addEventListener('change', refreshUn);
       $('#unConfirm').oninput = () => { unGo.disabled = $('#unConfirm').value.trim() !== 'UNINSTALL'; };
       unGo.onclick = async () => {
         if ($('#unConfirm').value.trim() !== 'UNINSTALL') return;
         unGo.disabled = true; unGo.textContent = 'Uninstalling…';
         const prev = await refreshUn();
-        const r = await api('/api/uninstall', { dataMode: $('#unMode').value, backupPath: prev.backupPath });
+        const r = await api('/api/uninstall', { dataMode: $('#unMode').value, backupPath: prev.backupPath, selectedIds: selectedUnIds(), scan: unScan });
         if (r.ok || r.handedOff) {
           $('#unList').className = 'okbox';
           $('#unList').innerHTML = 'Crew is stopping. ' + (r.backup && r.backup.path ? 'Backup: <span class="mono">' + esc(r.backup.path) + '</span>' : 'No backup was written.');
@@ -1907,7 +1926,8 @@
           <div class="srow"><div class="l"><b>Uninstall Claude Crew</b><p>Stop Crew, remove shortcuts and autostart, and choose what happens to your data. External project folders are never deleted.</p></div>
             <button class="btn danger" id="unOpen" type="button">Uninstall Claude Crew</button></div>
           <div id="unPanel" hidden>
-            <div class="srow"><div class="l"><b>Your data</b><p>Backup is the default. The zip is written outside the install folder.</p></div>
+            <div id="unScanList"></div>
+            <div class="srow"><div class="l"><b>Your data</b><p>Backup is the default. The zip is written outside every selected install folder.</p></div>
               <select class="stx" id="unMode"><option value="backup" selected>Back up (recommended)</option><option value="keep">Keep data in the folder</option><option value="delete">Delete everything</option></select></div>
             <div id="unList" class="errbox" hidden></div>
             <div class="srow"><div class="l"><b>Type UNINSTALL to confirm</b></div><input class="stx" id="unConfirm" placeholder="UNINSTALL" autocomplete="off"></div>

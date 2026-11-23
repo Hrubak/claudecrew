@@ -18,6 +18,15 @@ If this folder already has Crew, `setup.cmd` offers **Repair**, **Switch source*
 
 ## Uninstall
 
+The wizard and Settings scan for every Crew install and leftover (processes, tray, shortcuts, scheduled tasks, Run/RunOnce keys, and known folders). Items outside your user profile are unchecked. A read-only listing that changes nothing:
+
+```
+uninstall.cmd --scan --json
+```
+
+or, from the Crew folder: `node scripts/crew-scan.js --json`.
+
+
 Double-click **uninstall.cmd**, or open **Settings → General → Uninstall Claude Crew**. Choose **Back up** (the default), **Keep**, or **Delete** for your data. A backup zip is written outside the install folder, for example `%USERPROFILE%\ClaudeCrew-backup-YYYYMMDD-HHMMSS.zip`. You will see the exact list of what will be deleted, and must type `UNINSTALL` to confirm.
 
 ## If something goes wrong

@@ -7,6 +7,7 @@ const path = require('path');
 const { execFile, spawn } = require('child_process');
 const setup = require('./lib/setup');
 const uninstall = require('./lib/uninstall');
+const scan = require('./lib/scan');
 
 const ROOT = __dirname;
 const args = process.argv.slice(2);
@@ -18,6 +19,7 @@ const opt = (name, fallback) => {
 
 const START_DIR = path.resolve(opt('dir', ROOT));
 const WANT_UNINSTALL = flag('uninstall');
+const WANT_SCAN = flag('scan');
 const DRY_RUN = flag('dry-run');
 const PLAN_PATH = opt('plan', '');
 const NO_OPEN = flag('no-open');
@@ -67,6 +69,14 @@ async function handle(req, res) {
     }
     if (req.method === 'GET' && url.pathname === '/api/defaults') return send(res, 200, defaults());
     if (req.method === 'GET' && url.pathname === '/api/prereqs') return send(res, 200, await setup.checkPrereqs());
+    if (req.method === 'GET' && url.pathname === '/api/uninstall/scan') {
+      const result = await scan.scanCrew({
+        currentDir: url.searchParams.get('dir') || START_DIR,
+        extraDirs: [START_DIR],
+        scriptPath: path.join(ROOT, 'scan-inventory.ps1'),
+      });
+      return send(res, 200, result);
+    }
     if (req.method === 'GET' && url.pathname === '/api/branches') {
       const list = await setup.listBranches(url.searchParams.get('url') || '');
       return send(res, 200, { branches: list });
@@ -87,6 +97,38 @@ async function handle(req, res) {
     if (req.method !== 'POST') return send(res, 404, { error: 'not found' });
     const body = JSON.parse((await readBody(req)) || '{}');
 
+    if (url.pathname === '/api/prereqs/install') {
+      const kind = body.kind;
+      let spec;
+      try { spec = setup.prereqInstallSpec(kind); } catch (err) { return send(res, 400, { error: err.message }); }
+      if (!spec.available) return send(res, 501, { ok: false, error: spec.error, spec });
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' });
+      const log = (line) => res.write(JSON.stringify({ line }) + '\n');
+      log('Running: ' + spec.commandText);
+      if (spec.docs) log('Source: ' + spec.docs);
+      try {
+        const result = await setup.runPrereqInstall(kind, { onData: (s) => log(s.replace(/\r/g, '')) });
+        await setup.refreshProcessPath();
+        const prereqs = await setup.checkPrereqs();
+        res.write(JSON.stringify({ ok: result.ok, code: result.code, error: result.error, prereqs, spec }) + '\n');
+      } catch (err) {
+        res.write(JSON.stringify({ ok: false, error: err.message }) + '\n');
+      }
+      return res.end();
+    }
+    if (url.pathname === '/api/prereqs/login' || url.pathname === '/api/claude-login') {
+      const launched = setup.launchClaudeLogin();
+      return send(res, launched.ok ? 200 : 501, launched);
+    }
+    if (url.pathname === '/api/uninstall/preview') {
+      try {
+        const scanResult = body.scan || await scan.scanCrew({ currentDir: body.dir || START_DIR, extraDirs: [START_DIR], scriptPath: path.join(ROOT, 'scan-inventory.ps1') });
+        const preview = uninstall.previewScanUninstall(scanResult, { selectedIds: body.selectedIds, dataMode: body.dataMode || 'backup' });
+        return send(res, 200, preview);
+      } catch (err) {
+        return send(res, 400, { ok: false, error: err.message });
+      }
+    }
     if (url.pathname === '/api/check-folder') {
       return send(res, 200, await setup.checkFolder(body.path, { expectedUrl: body.url, expectedBranch: body.branch }));
     }
@@ -136,11 +178,35 @@ async function handle(req, res) {
     }
     if (url.pathname === '/api/uninstall') {
       try {
-        const result = await uninstall.runUninstall({
-          installDir: body.dir || START_DIR,
-          dataMode: body.dataMode || 'backup',
-          dryRun: !!body.dryRun || DRY_RUN,
-          backupPath: body.backupPath,
+        const scanResult = body.scan || await scan.scanCrew({ currentDir: body.dir || START_DIR, extraDirs: [START_DIR], scriptPath: path.join(ROOT, 'scan-inventory.ps1') });
+        const dataMode = body.dataMode || 'backup';
+        const dryRun = !!body.dryRun || DRY_RUN;
+        const preview = uninstall.previewScanUninstall(scanResult, { selectedIds: body.selectedIds, dataMode });
+        if (dryRun) {
+          const result = await uninstall.runScanUninstall({
+            scanResult, selectedIds: body.selectedIds, dataMode, dryRun: true, backupPath: body.backupPath || preview.backupPath, sourceRoot: ROOT,
+          });
+          return send(res, 200, result);
+        }
+        if (uninstall.needsHandoff(preview.folders, { cwd: process.cwd(), scriptPath: __filename, execPath: process.execPath })) {
+          let backup = null;
+          if (dataMode === 'backup' && preview.userData.length) {
+            backup = await uninstall.backupMany(preview.userData, body.backupPath || preview.backupPath);
+          }
+          const copied = uninstall.copyUninstallerToTemp({ sourceRoot: ROOT });
+          const planPath = path.join(copied.dir, 'uninstall-plan.json');
+          fs.writeFileSync(planPath, JSON.stringify({
+            scanResult, selectedIds: body.selectedIds, dataMode, backupPath: (backup && backup.path) || body.backupPath || preview.backupPath,
+            waitForPid: process.pid, createdAt: new Date().toISOString(),
+          }, null, 2));
+          const child = spawn(process.execPath, [path.join(copied.dir, 'setup-wizard.js'), '--exec-plan', '--plan', planPath], {
+            detached: true, stdio: 'ignore', cwd: copied.dir,
+          });
+          child.unref();
+          return send(res, 200, { ok: true, handedOff: true, tempDir: copied.dir, backup, preview, planPath });
+        }
+        const result = await uninstall.runScanUninstall({
+          scanResult, selectedIds: body.selectedIds, dataMode, dryRun: false, backupPath: body.backupPath || preview.backupPath, sourceRoot: ROOT,
         });
         return send(res, 200, result);
       } catch (err) {
@@ -249,18 +315,34 @@ async function runPlanAndExit() {
       try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 500)); } catch { break; }
     }
   }
-  const result = await uninstall.runUninstall({
-    installDir: plan.installDir || START_DIR,
-    dataMode: plan.dataMode || 'backup',
-    dryRun: !!plan.dryRun || DRY_RUN,
-    backupPath: plan.backupPath,
-  });
+  const result = plan.scanResult
+    ? await uninstall.runScanUninstall({
+        scanResult: plan.scanResult,
+        selectedIds: plan.selectedIds,
+        dataMode: plan.dataMode || 'backup',
+        dryRun: !!plan.dryRun || DRY_RUN,
+        backupPath: plan.backupPath,
+        sourceRoot: __dirname,
+        cwd: process.cwd(),
+        scriptPath: __filename,
+      })
+    : await uninstall.runUninstall({
+        installDir: plan.installDir || START_DIR,
+        dataMode: plan.dataMode || 'backup',
+        dryRun: !!plan.dryRun || DRY_RUN,
+        backupPath: plan.backupPath,
+      });
   console.log(result.dryRun ? 'Dry-run complete.' : 'Uninstall complete.');
   if (result.backup && result.backup.path) console.log('Backup: ' + result.backup.path);
   process.exit(result.ok ? 0 : 1);
 }
 
 (async () => {
+  if (WANT_SCAN) {
+    const { spawnSync } = require('child_process');
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'crew-scan.js'), ...args.filter((a) => a !== '--uninstall')], { stdio: 'inherit' });
+    process.exit(r.status || 0);
+  }
   if (PLAN_PATH && flag('exec-plan')) {
     await runPlanAndExit();
     return;
