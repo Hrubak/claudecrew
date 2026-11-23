@@ -63,7 +63,7 @@ function Test-CrewTask { [bool](Get-ScheduledTask -TaskName $TaskName -ErrorActi
 
 function Start-Crew {
     if (Test-CrewTask) { Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
-    else { Start-Process -FilePath (Join-Path $Here 'run-crew.cmd') -WorkingDirectory $Here -WindowStyle Hidden }
+    else { Start-Process -FilePath (Join-Path $Here 'run-crew.cmd') -WorkingDirectory $Here -WindowStyle Hidden }  # no console; run-crew waits in-process
 }
 
 function Get-CrewPid {

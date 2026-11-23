@@ -51,7 +51,7 @@ describe('process stop tree (Beast table)', () => {
     ];
   }
 
-  test('stops tray, then shells, then the server; excludes the uninstall wizard 17608 and 12964', async () => {
+  test('stops run-crew loops, then tray, then the server; excludes the uninstall wizard 17608 and 12964', async () => {
     const procs = beastProcs('C:\\Users\\hruba\\Projects\\claudecrew', 'C:\\Users\\hruba\\Downloads\\claudecrew-main\\claudecrew-main');
     const plan = un.planProcessStops(procs, { selfPid: 12964, selfPpid: 17608 });
     const pids = plan.planned.map((p) => p.pid);
@@ -60,12 +60,15 @@ describe('process stop tree (Beast table)', () => {
     assert.ok(plan.excluded.includes(17608));
     assert.ok(plan.excluded.includes(12964));
     assert.deepEqual(pids.filter((p) => [9436, 7972, 17180, 16400, 16420].includes(p)).sort((a, b) => a - b), [7972, 9436, 16400, 16420, 17180].sort((a, b) => a - b));
-    const trays = plan.planned.filter((p) => p.stopRank === 0).map((p) => p.pid).sort((a, b) => a - b);
-    const shells = plan.planned.filter((p) => p.stopRank === 1).map((p) => p.pid).sort((a, b) => a - b);
+    const shells = plan.planned.filter((p) => p.stopRank === 0).map((p) => p.pid).sort((a, b) => a - b);
+    const trays = plan.planned.filter((p) => p.stopRank === 1).map((p) => p.pid).sort((a, b) => a - b);
     const servers = plan.planned.filter((p) => p.stopRank === 2).map((p) => p.pid);
-    assert.deepEqual(trays, [16400, 16420]);
     assert.deepEqual(shells, [7972, 17180]);
+    assert.deepEqual(trays, [16400, 16420]);
     assert.deepEqual(servers, [9436]);
+    const firstLoop = plan.planned.find((p) => p.stopRank === 0);
+    const firstServer = plan.planned.find((p) => p.stopRank === 2);
+    assert.ok(plan.planned.indexOf(firstLoop) < plan.planned.indexOf(firstServer));
     const order = plan.planned.map((p) => p.stopRank);
     assert.deepEqual(order, [...order].sort((a, b) => a - b));
 

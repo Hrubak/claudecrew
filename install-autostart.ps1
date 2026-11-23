@@ -28,7 +28,9 @@ $lnk.WorkingDirectory = $Here
 $lnk.Description = 'Claude Crew tray icon'
 $lnk.Save()
 
-$action = New-ScheduledTaskAction -Execute (Join-Path $Here 'run-crew.cmd') -WorkingDirectory $Here
+$runner = Join-Path $Here 'run-crew.cmd'
+# conhost --headless keeps the supervisor (and its wait) from showing a console at boot.
+$action = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\conhost.exe" -Argument "--headless cmd.exe /c `"$runner`"" -WorkingDirectory $Here
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $trigger.Delay = 'PT30S'   # give the network a moment after boot
 # S4U = runs as you without storing your password, whether or not you're signed in.

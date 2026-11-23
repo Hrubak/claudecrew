@@ -51,6 +51,18 @@ function readBody(req, limit = 1 << 20) {
   });
 }
 
+
+async function scanForUninstall(dir) {
+  const current = dir || START_DIR;
+  const result = await scan.scanCrew({
+    currentDir: current,
+    extraDirs: [START_DIR],
+    scriptPath: path.join(ROOT, 'scan-inventory.ps1'),
+  });
+  const located = uninstall.locateInstalls({ currentDir: START_DIR, extraDirs: [current], scanResult: result });
+  return uninstall.annotateScanForUninstall(result, located);
+}
+
 function defaults() {
   return {
     dir: START_DIR,
@@ -81,11 +93,7 @@ async function handle(req, res) {
       return send(res, 200, await listBackups((url.searchParams.get('extra') || '').split(',').filter(Boolean)));
     }
     if (req.method === 'GET' && url.pathname === '/api/uninstall/scan') {
-      const result = await scan.scanCrew({
-        currentDir: url.searchParams.get('dir') || START_DIR,
-        extraDirs: [START_DIR],
-        scriptPath: path.join(ROOT, 'scan-inventory.ps1'),
-      });
+      const result = await scanForUninstall(url.searchParams.get('dir') || START_DIR);
       return send(res, 200, result);
     }
     if (req.method === 'GET' && url.pathname === '/api/branches') {
@@ -177,7 +185,7 @@ async function handle(req, res) {
     }
     if (url.pathname === '/api/uninstall/preview') {
       try {
-        const scanResult = body.scan || await scan.scanCrew({ currentDir: body.dir || START_DIR, extraDirs: [START_DIR], scriptPath: path.join(ROOT, 'scan-inventory.ps1') });
+        const scanResult = body.scan || await scanForUninstall(body.dir || START_DIR);
         const preview = uninstall.previewScanUninstall(scanResult, { selectedIds: body.selectedIds, dataMode: body.dataMode || 'backup' });
         return send(res, 200, preview);
       } catch (err) {
@@ -248,39 +256,33 @@ async function handle(req, res) {
     }
     if (url.pathname === '/api/uninstall') {
       try {
-        const scanResult = body.scan || await scan.scanCrew({ currentDir: body.dir || START_DIR, extraDirs: [START_DIR], scriptPath: path.join(ROOT, 'scan-inventory.ps1') });
+        const scanResult = body.scan || await scanForUninstall(body.dir || START_DIR);
         const dataMode = body.dataMode || 'backup';
         const dryRun = !!body.dryRun || DRY_RUN;
         const preview = uninstall.previewScanUninstall(scanResult, { selectedIds: body.selectedIds, dataMode });
-        if (dryRun) {
-          const result = await uninstall.runScanUninstall({
-            scanResult, selectedIds: body.selectedIds, dataMode, dryRun: true, backupPath: body.backupPath || preview.backupPath, sourceRoot: ROOT,
-            selfPid: process.pid, selfPpid: process.ppid,
-          });
-          return send(res, 200, result);
-        }
-        if (uninstall.needsHandoff(preview.folders, { cwd: process.cwd(), scriptPath: __filename, execPath: process.execPath })) {
-          let backup = null;
-          if (dataMode === 'backup' && preview.userData.length) {
-            backup = await uninstall.backupMany(preview.userData, body.backupPath || preview.backupPath);
-          }
-          const copied = uninstall.copyUninstallerToTemp({ sourceRoot: ROOT });
-          const planPath = path.join(copied.dir, 'uninstall-plan.json');
+        const result = await uninstall.runScanUninstall({
+          scanResult, selectedIds: body.selectedIds, dataMode, dryRun,
+          backupPath: body.backupPath || preview.backupPath, sourceRoot: ROOT,
+          selfPid: process.pid, selfPpid: process.ppid,
+          cwd: process.cwd(), scriptPath: __filename, execPath: process.execPath,
+          launcherDir: START_DIR,
+        });
+        if (result.handedOff) {
+          const planPath = path.join(result.tempDir, 'uninstall-plan.json');
           fs.writeFileSync(planPath, JSON.stringify({
-            scanResult, selectedIds: body.selectedIds, dataMode, backupPath: (backup && backup.path) || body.backupPath || preview.backupPath,
+            scanResult, selectedIds: body.selectedIds, dataMode,
+            backupPath: (result.backup && result.backup.path) || body.backupPath || preview.backupPath,
+            alreadyVerifiedBackup: !!(result.backup && result.backup.path),
+            launcherDir: START_DIR,
             waitForPid: process.pid, createdAt: new Date().toISOString(),
           }, null, 2));
-          const child = spawn(process.execPath, [path.join(copied.dir, 'setup-wizard.js'), '--exec-plan', '--plan', planPath], {
-            detached: true, stdio: 'ignore', cwd: copied.dir,
+          const child = spawn(process.execPath, [path.join(result.tempDir, 'setup-wizard.js'), '--exec-plan', '--plan', planPath], {
+            detached: true, stdio: 'ignore', cwd: result.tempDir,
           });
           child.unref();
-          return send(res, 200, { ok: true, handedOff: true, tempDir: copied.dir, backup, preview, planPath });
+          return send(res, 200, { ...result, planPath });
         }
-        const result = await uninstall.runScanUninstall({
-          scanResult, selectedIds: body.selectedIds, dataMode, dryRun: false, backupPath: body.backupPath || preview.backupPath, sourceRoot: ROOT,
-          selfPid: process.pid, selfPpid: process.ppid,
-        });
-        return send(res, 200, result);
+        return send(res, result.ok ? 200 : 400, result);
       } catch (err) {
         return send(res, 400, { ok: false, error: err.message });
       }
@@ -394,6 +396,8 @@ async function runPlanAndExit() {
         dataMode: plan.dataMode || 'backup',
         dryRun: !!plan.dryRun || DRY_RUN,
         backupPath: plan.backupPath,
+        alreadyVerifiedBackup: !!plan.alreadyVerifiedBackup,
+        launcherDir: plan.launcherDir || START_DIR,
         sourceRoot: __dirname,
         cwd: process.cwd(),
         scriptPath: __filename,
@@ -403,6 +407,8 @@ async function runPlanAndExit() {
         dataMode: plan.dataMode || 'backup',
         dryRun: !!plan.dryRun || DRY_RUN,
         backupPath: plan.backupPath,
+        alreadyVerifiedBackup: !!plan.alreadyVerifiedBackup,
+        launcherDir: plan.launcherDir || START_DIR,
       });
   console.log(result.dryRun ? 'Dry-run complete.' : 'Uninstall complete.');
   if (result.backup && result.backup.path) console.log('Backup: ' + result.backup.path);

@@ -173,7 +173,8 @@
     </section>
     <section class="page" data-id="uscan" hidden>
       <h2>What we found</h2>
-      <p class="lead">Everything below looks like a Claude Crew install or leftover. Items outside your user profile are unchecked. External project folders are never deleted.</p>
+      <p class="lead">Everything below looks like a Claude Crew install or leftover. The live install is recommended. A source or extract folder you launched the uninstaller from is left unchecked and will not be deleted unless it is the install. Items outside your user profile are unchecked. External project folders are never deleted.</p>
+      <div id="locateBox" hidden></div>
       <div id="scanList">Scanning…</div>
     </section>
     <section class="page" data-id="udata" hidden>
@@ -185,6 +186,7 @@
         <label class="radio"><input type="radio" name="dataMode" value="delete"><div><b>Delete</b><p>Permanently delete Crew and the user data inside the install folder. This cannot be undone.</p></div></label>
       </div>
       <p class="mono" id="backupPath" style="color:var(--muted)"></p>
+      <p class="lead">If you choose Back up, uninstall writes and verifies the zip before it stops anything or deletes files. A failed backup aborts the uninstall.</p>
     </section>
     <section class="page" data-id="confirm" hidden>
       <h2>Confirm uninstall</h2>
@@ -665,7 +667,7 @@ function selectedScanIds() {
 function renderScanGroup(title, items, line) {
   if (!items || !items.length) return '';
   return '<div class="ssh"><h4>'+esc(title)+' ('+items.length+')</h4></div><div class="scard">'+items.map((it) => {
-    const note = it.outsideProfile ? ' <span class="mono" style="color:var(--muted)">outside your user profile</span>' : (it.readOnly ? ' <span class="mono" style="color:var(--muted)">read-only check</span>' : '');
+    const note = it.recommended ? ' <span class="mono">live install</span>' : (it.role==='source-or-extract' ? ' <span class="mono" style="color:var(--muted)">source or extract — not deleted unless it is the install</span>' : (it.outsideProfile ? ' <span class="mono" style="color:var(--muted)">outside your user profile</span>' : (it.readOnly ? ' <span class="mono" style="color:var(--muted)">read-only check</span>' : '')));
     return '<label class="srow" style="cursor:pointer"><input type="checkbox" data-id="'+esc(it.id)+'" '+(it.defaultChecked?'checked':'')+'> <div class="l"><b>'+esc(line(it))+'</b><p>'+esc(it.reason||'')+note+'</p></div></label>';
   }).join('')+'</div>';
 }
@@ -675,6 +677,11 @@ async function loadScan() {
   const j = await fetch('/api/uninstall/scan').then(r=>r.json()).catch((e) => ({ error: e.message }));
   state.scan = j;
   if (j.error) { box.innerHTML = '<div class="errbox">'+esc(j.error)+'</div>'; return; }
+  const loc = $('locateBox');
+  if (loc) {
+    if (j.locate && j.locate.message) { loc.hidden = false; loc.innerHTML = '<div class="okbox">'+esc(j.locate.message)+'</div>'; }
+    else { loc.hidden = true; loc.innerHTML = ''; }
+  }
   const g = j.groups || {};
   box.innerHTML = renderScanGroup('Folders', g.folders, (i) => i.path)
     + renderScanGroup('Processes', g.processes, (i) => 'PID '+i.pid+' '+ (i.name||'') )
@@ -696,8 +703,9 @@ async function drawConfirm() {
   await loadPreview();
   const j = state.preview || {};
   const items = (j.willDelete||[]).filter(d => d.rel !== '.').map(d => '<li>'+esc(d.rel || d.path || '')+(d.installDir?'  ('+esc(pathBase(d.installDir))+')':'')+(d.safe===false?' (skipped: '+esc(d.reason)+')':'')+'</li>').join('');
-  $('deleteList').innerHTML = '<div class="errbox"><b>Will be deleted</b><ul class="filelist">'+items+'</ul>'
-    + (j.backupPath ? '<p>A backup will be written first to <span class="mono">'+esc(j.backupPath)+'</span>.</p>' : '')
+  const folders = (j.folders||[]).map(f => '<li><span class="mono">'+esc(f)+'</span></li>').join('');
+  $('deleteList').innerHTML = '<div class="errbox"><b>Install folders</b><ul class="filelist">'+folders+'</ul><b>Will be deleted</b><ul class="filelist">'+items+'</ul>'
+    + (j.backupPath ? '<p>A backup will be written and verified first at <span class="mono">'+esc(j.backupPath)+'</span>. If the backup fails, uninstall stops — nothing is stopped or deleted.</p>' : '')
     + (j.skipped?.length ? '<p>Skipped: '+j.skipped.map(s=>esc(s.path||s.reason)).join('; ')+'</p>' : '')
     + '</div>';
   setFoot();
@@ -716,7 +724,7 @@ async function runUninstall() {
     $('undoneLead').innerHTML = (j.backup && j.backup.path) ? ('A backup is at <span class="mono">'+esc(j.backup.path)+'</span>.'+countHtml) : 'No backup was written.';
     step = FLOWS.uninstall.indexOf('undone'); show();
     renderStillRunning(j.stillRunning || [], j.backup && j.backup.counts);
-  } else { log.textContent += '\nSTOPPED: '+(j.error||'Uninstall failed'); $('backBtn').hidden = false; }
+  } else { log.textContent += '\nSTOPPED: '+(j.error|| (j.reason==='still-running'?'Crew processes are still running after 3 stop attempts. Files were not removed.':'Uninstall failed')); $('backBtn').hidden = false; if (j.stillRunning) renderStillRunning(j.stillRunning, j.backup && j.backup.counts); }
 }
 
 $('backBtn').onclick = () => { if (step>0) { step--; show(); } };
