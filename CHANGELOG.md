@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.31.1
+- Public snapshots are now made by tools/publish.js: a scrubbed export with example config and no personal data
+- Screen tools: desktop screenshots, clicks, typing and window control for agents while Computer control is ON
+- Computer control switch in the header, with confirmation before turning it off while agents work
+- Preview panel: run web apps through Crew and watch them live on PC and phone
+- Status board from STATUS.md with each agent's latest item and who it is waiting on
+- Waiting-on-you box with answer buttons for agent questions
+- Automations: scheduled and event-driven jobs with a plain-language editor
+- Credentials panel for app logins, kept out of chat
+- Usage meters in the header, including a third weekly bar when used
+- Silent-run watchdog, stale-handoff guard and a direct stop command per agent
+- Per-run changed-files log with diff and undo
 ## 0.6.0
 - Sidebar layout on desktop and a slide-out crew drawer on phones, with unread badges and a compact header menu.
 - Integrations panel: linked MCP servers, services and secret-looking environment variable names (values are never read), and which agents can reach them.

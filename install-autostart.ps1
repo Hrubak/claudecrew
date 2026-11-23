@@ -40,7 +40,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew -StartWhenAvailable
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
-    -Settings $settings -Description "Claude Crew agent chat ($Here). Starts at boot, runs hidden, logs to data\crew.log." `
+    -Settings $settings -Description 'Claude Crew agent chat (C:\Claude Code\ClaudeCrew). Starts at boot, runs hidden, logs to data\crew.log.' `
     -Force | Out-Null
 
 # Let you start/stop/restart it later without an admin prompt.

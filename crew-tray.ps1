@@ -10,15 +10,15 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TaskName = 'Claude Crew'
 
-# Same overrides as server.js: CREW_CONFIG (config file) and CREW_PORT.
-$CfgPath = if (-not $env:CREW_CONFIG) { Join-Path $Here 'crew.config.json' }
-           elseif ([IO.Path]::IsPathRooted($env:CREW_CONFIG)) { $env:CREW_CONFIG }
-           else { Join-Path $Here $env:CREW_CONFIG }
-$cfg = Get-Content $CfgPath -Raw | ConvertFrom-Json
-$port = if ($env:CREW_PORT) { [int]$env:CREW_PORT } elseif ($cfg.settings.port) { $cfg.settings.port } else { 7777 }
+$cfg = Get-Content (Join-Path $Here 'crew.config.json') -Raw | ConvertFrom-Json
+$port = if ($cfg.settings.port) { $cfg.settings.port } else { 7777 }
 $LocalUrl = "http://localhost:$port"
 # Status checks go straight to IPv4; "localhost" can stall on IPv6 first in Windows PowerShell.
 $ApiUrl = "http://127.0.0.1:$port"
+# Remote mode: on a PC that doesn't run Crew, put {"server":"http://192.168.1.20:7777","key":"<access key>"} in data\tray-remote.json.
+$Remote = $null; $RemoteKey = $null
+try { $t = Get-Content (Join-Path $Here 'data\tray-remote.json') -Raw | ConvertFrom-Json; if ($t.server) { $Remote = ([string]$t.server).TrimEnd('/'); $RemoteKey = $t.key; $script:CfId = $t.cfId; $script:CfSecret = $t.cfSecret } } catch {}
+if ($Remote) { $LocalUrl = $Remote; $ApiUrl = $Remote }
 $PublicUrl = if ($cfg.cloudflare -and $cfg.cloudflare.enabled) { "https://$($cfg.cloudflare.hostname)" } else { $null }
 
 # One tray icon per user; a second launch just opens Crew.
@@ -77,13 +77,13 @@ function Restart-Crew {
         try {
             Invoke-RestMethod "$ApiUrl/api/restart" -Method Post -ContentType 'application/json' -Body '{}' `
                 -Headers @{ 'X-Crew' = '1' } -TimeoutSec 5 -UseBasicParsing | Out-Null
-            $tray.ShowBalloonTip(3000, 'Claude Crew', 'Restarting… back in about 10 seconds.', 'Info')
+            $tray.ShowBalloonTip(3000, 'Claude Crew', 'Restarting... back in about 10 seconds.', 'Info')
         } catch {
             $tray.ShowBalloonTip(5000, 'Claude Crew', "Couldn't restart Crew: $($_.Exception.Message)", 'Warning')
         }
     } else {
         Start-Crew
-        $tray.ShowBalloonTip(3000, 'Claude Crew', 'Starting Crew…', 'Info')
+        $tray.ShowBalloonTip(3000, 'Claude Crew', 'Starting Crew...', 'Info')
     }
 }
 
@@ -91,11 +91,11 @@ function Restart-Crew {
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
 $tray.Icon = $Icons.down
-$tray.Text = 'Claude Crew: starting…'
+$tray.Text = 'Claude Crew: starting...'
 $tray.Visible = $true
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$miStatus = $menu.Items.Add('Checking…'); $miStatus.Enabled = $false
+$miStatus = $menu.Items.Add('Checking...'); $miStatus.Enabled = $false
 [void]$menu.Items.Add('-')
 $miOpen = $menu.Items.Add('Open Crew')
 $miOpen.Font = New-Object System.Drawing.Font($miOpen.Font, [System.Drawing.FontStyle]::Bold)
@@ -123,6 +123,21 @@ $miRestart.Add_Click({
     }
     Restart-Crew
 })
+$miQuit = $menu.Items.Add('Quit Crew completely (stop server + tray)')
+$miQuit.Add_Click({
+    $r = [System.Windows.Forms.MessageBox]::Show('Stop Crew and all agents, and close the tray?', 'Claude Crew', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $timer.Stop()
+    try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } catch {}
+    # kill the restart loop first so it can't bring Crew back
+    Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'run-crew\.cmd' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    $p = Get-CrewPid
+    if ($p) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue }
+    $tray.Visible = $false
+    [System.Windows.Forms.Application]::Exit()
+})
 $miExit = $menu.Items.Add('Hide tray icon (Crew keeps running)')
 $miExit.Add_Click({ $timer.Stop(); $tray.Visible = $false; [System.Windows.Forms.Application]::Exit() })
 
@@ -140,19 +155,24 @@ $script:startedAt = Get-Date
 $script:triedStart = $false
 $script:openPending = [bool]$Open
 
-function Set-TrayText([string]$t) { $tray.Text = if ($t.Length -gt 63) { $t.Substring(0, 62) + '…' } else { $t } }
+function Set-TrayText([string]$t) { $tray.Text = if ($t.Length -gt 63) { $t.Substring(0, 62) + '...' } else { $t } }
 
 function Update-Status {
     $s = $null
-    try { $s = Invoke-RestMethod "$ApiUrl/api/state" -TimeoutSec 2 -UseBasicParsing } catch {}
+    try {
+        $h = @{}
+        if ($RemoteKey) { $h['Cookie'] = "crew_key=$([uri]::EscapeDataString($RemoteKey))" }
+        if ($script:CfId -and $script:CfSecret) { $h['CF-Access-Client-Id'] = $script:CfId; $h['CF-Access-Client-Secret'] = $script:CfSecret }
+        $s = Invoke-RestMethod "$ApiUrl/api/state" -Headers $h -TimeoutSec 3 -UseBasicParsing
+    } catch { $script:lastErr = $_.Exception.Message }
 
     if (-not $s) {
         $tray.Icon = $Icons.down
         Set-TrayText 'Claude Crew: not running'
-        $miStatus.Text = 'Crew is not running'
+        $miStatus.Text = if ($Remote) { "Can't reach $Remote" } else { 'Crew is not running' }
         $script:lastWorking = 0
         # If Crew isn't up shortly after the tray starts (e.g. it was never started), start it once.
-        if (-not $script:triedStart -and ((Get-Date) - $script:startedAt).TotalSeconds -gt 8 -and -not (Get-CrewPid)) {
+        if (-not $Remote -and -not $script:triedStart -and ((Get-Date) - $script:startedAt).TotalSeconds -gt 8 -and -not (Get-CrewPid)) {
             $script:triedStart = $true
             Start-Crew
         }
@@ -186,7 +206,7 @@ function Update-Status {
         if ($Settings.notify) {
             $title = if ($names[$latest.from]) { $names[$latest.from] } else { $latest.from }
             $body = ($latest.text -replace '\s+', ' ').Trim()
-            if ($body.Length -gt 200) { $body = $body.Substring(0, 199) + '…' }
+            if ($body.Length -gt 200) { $body = $body.Substring(0, 199) + '...' }
             $tipIcon = if ($latest.kind -eq 'error') { 'Warning' } else { 'Info' }
             $tray.ShowBalloonTip(8000, $title, $body, $tipIcon)
         }

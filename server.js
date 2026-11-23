@@ -11,26 +11,38 @@ const crypto = require('crypto');
 const { spawn, execFile, execFileSync } = require('child_process');
 const { createUsage } = require('./lib/usage');
 const changes = require('./lib/changes');
+const activity = require('./lib/activity');
+const credentials = require('./lib/credentials');
 const { createScheduler } = require('./lib/scheduler');
 const { createPush } = require('./lib/webpush');
 const { createUpdater } = require('./lib/update');
 const { createIntegrations } = require('./lib/integrations');
 const { createPresence, startClient, pairOnce } = require('./lib/presence');
+const { createAutomations } = require('./lib/automations');
+const statusLib = require('./lib/status');
+const { createProcWatch } = require('./lib/procs');
+const { checkPage } = require('./lib/check');
+const { createPreviews } = require('./lib/previews');
+const freezer = require('./lib/freeze');
 
 const ROOT = __dirname;
-// Paths can be moved with environment variables; relative values resolve against this folder.
-const DATA_DIR = path.resolve(ROOT, process.env.CREW_DATA_DIR || 'data');
+const DATA_DIR = path.join(ROOT, 'data');
 const PROMPT_DIR = path.join(DATA_DIR, 'prompts');
 const PUBLIC_DIR = path.join(ROOT, 'public');
-const CONFIG_PATH = path.resolve(ROOT, process.env.CREW_CONFIG || 'crew.config.json');
-const PREFS_PATH = path.join(DATA_DIR, 'prefs.json');
+const CONFIG_PATH = path.join(ROOT, 'crew.config.json');
 const NOTES_PATH = path.join(DATA_DIR, 'notes.json');
+const REACT_PATH = path.join(DATA_DIR, 'reactions.json');
+const PINS_PATH = path.join(DATA_DIR, 'pins.json');
+let pins = []; try { pins = JSON.parse(fs.readFileSync(PINS_PATH, 'utf8')); } catch {}
+let reactions = {}; try { reactions = JSON.parse(fs.readFileSync(REACT_PATH, 'utf8')); } catch {}
+// Open questions for the owner, shown in the "Waiting on you" box until answered or dismissed.
+const ASKS_PATH = path.join(DATA_DIR, 'asks.json');
+let asks = []; try { asks = JSON.parse(fs.readFileSync(ASKS_PATH, 'utf8')).filter((x) => !x.auto && x.ts > Date.now() - 3 * 24 * 3600 * 1000); } catch {}
+const PREFS_PATH = path.join(DATA_DIR, 'prefs.json');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 const LOG_PATH = path.join(DATA_DIR, 'messages.jsonl');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const HISTORY_LIMIT = 400;
-// Quiet automatic fresh conversation when context gets heavy or a session runs long.
-const AUTO_RESET_TOKENS = 110000, AUTO_RESET_TURNS = 25;
 const ID_RE = /^[a-z][a-z0-9-]*$/;
 
 fs.mkdirSync(PROMPT_DIR, { recursive: true });
@@ -56,53 +68,34 @@ function loadCloudflare(c) {
 }
 
 function loadConfig() {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    throw new Error(`No config at ${CONFIG_PATH}. Copy crew.config.example.json to crew.config.json and edit it (see docs/SETUP.md).`);
-  }
-  let raw;
-  try {
-    raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-  } catch (err) {
-    throw new Error(`${CONFIG_PATH} is not valid JSON (${err.message}). Common causes: a comma after the last item in a list, a missing quote or comma, or a Windows path with single backslashes (write C:/Projects/app or C:\\\\Projects\\\\app).`);
-  }
-  if (!Array.isArray(raw.agents) || !raw.agents.length) throw new Error('crew.config.json has no agents. Add at least one entry under "agents" (see crew.config.example.json).');
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   const s = raw.settings || {};
   const settings = {
-    port: Number(process.env.CREW_PORT) || s.port || 7777,
+    port: s.port || 7777,
     allowLan: !!s.allowLan,
-    userName: process.env.CREW_USER_NAME || s.userName || 'You',
+    userName: s.userName || 'You',
     defaultAgent: (s.defaultAgent || raw.agents[0].id).toLowerCase(),
     maxHops: s.maxHops ?? 6,
     maxConcurrent: Math.max(1, s.maxConcurrent || 2),
-    permissionMode: s.permissionMode || 'auto',
+    groupCaps: s.groupCaps || {}, // optional per-group override, e.g. { "diablo": 3 }
+    permissionMode: s.permissionMode || 'bypassPermissions',
     model: s.model || null,
-    claudePath: process.env.CLAUDE_PATH || s.claudePath || null,
+    claudePath: s.claudePath || null,
     budget: s.budget || {},
     cloudflare: loadCloudflare(raw.cloudflare),
   };
-  const agents = raw.agents.map((a) => {
+  const agents = (raw.agents || []).map((a) => {
     const id = String(a.id || '').toLowerCase();
-    if (!ID_RE.test(id) || id === 'all') throw new Error(`Bad agent id "${a.id}" (use lowercase letters, digits, dashes, starting with a letter; "all" is reserved)`);
+    if (!ID_RE.test(id) || id === 'all') throw new Error(`Bad agent id "${a.id}" (use lowercase letters, digits, dashes; "all" is reserved)`);
     return { ...a, id, name: a.name || id, cwd: path.resolve(ROOT, a.cwd || '.') };
   });
-  const seen = new Set();
-  for (const a of agents) {
-    if (seen.has(a.id)) throw new Error(`Two agents share the id "${a.id}". Each agent needs its own id.`);
-    seen.add(a.id);
-  }
+  if (!agents.length) throw new Error('crew.config.json has no agents');
   if (!agents.some((a) => a.id === settings.defaultAgent)) settings.defaultAgent = agents[0].id;
   return { settings, agents };
 }
 
 hydrateUserEnv();
-let loaded;
-try {
-  loaded = loadConfig();
-} catch (err) {
-  console.error(`\n  Crew can't start: ${err.message}\n`);
-  process.exit(1);
-}
-const { settings, agents } = loaded;
+const { settings, agents } = loadConfig();
 const byId = Object.fromEntries(agents.map((a) => [a.id, a]));
 
 for (const a of agents) {
@@ -150,18 +143,14 @@ const push = createPush({
   // Contact URL the push services see; never an email address.
   subject: settings.cloudflare ? `https://${settings.cloudflare.hostname}` : 'https://localhost',
 });
+const updater = createUpdater({ root: ROOT, dataDir: DATA_DIR, repo: 'hast3/claudecrew', supervised: false, log: (m) => console.log(m) });
+const VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch { return '0.0.0'; } })();
+const rawCfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')).settings || {};
+const presence = createPresence({ file: path.join(DATA_DIR, 'presence.json'), selfId: 'hub', selfName: rawCfg.machineName || os.hostname(), version: VERSION });
 const integrations = createIntegrations({
   getAgents: () => agents, getConfig: () => ({ settings, cloudflare: settings.cloudflare }),
   pushCount: () => push.count(), machines: () => presence.list(),
 });
-const updater = createUpdater({
-  root: ROOT, dataDir: DATA_DIR, repo: 'hast3/claudecrew',
-  supervised: process.env.CREW_SUPERVISED === '1', // run-crew.cmd restarts us after an exit
-  log: (m) => console.log(m),
-});
-const VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version; } catch { return '0.0.0'; } })();
-const rawCfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')).settings || {};
-const presence = createPresence({ file: path.join(DATA_DIR, 'presence.json'), selfId: 'hub', selfName: rawCfg.machineName || os.hostname(), version: VERSION });
 const presenceClientFile = path.join(DATA_DIR, 'presence-client.json');
 let presenceTimer = null;
 function startPresenceClient(hub) {
@@ -199,10 +188,62 @@ function broadcast(event, data) {
 }
 setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 25000);
 
+// ---------------------------------------------------------------- app previews + agent browser
+// Dev servers Crew runs for web-app work, shown at /preview/<id>/ (see lib/previews.js).
+const previews = createPreviews({ dataDir: DATA_DIR, onChange: () => broadcast('previews', previews.list()) });
+
+// Agents with "browser": true in crew.config.json get a real (invisible) Edge they can drive:
+// open pages, click, type, screenshot, read console errors. Playwright MCP, installed in tools/browser.
+const BROWSER_CLI = path.join(ROOT, 'tools', 'browser', 'node_modules', '@playwright', 'mcp', 'cli.js');
+// Every agent also gets the "screen" tools (lib/screen-mcp.js): see and drive the owner's real desktop,
+// only while Computer control is ON. Shots stay in memory; the rare saved one goes to crew-tmp.
+const SCREEN_MCP = path.join(ROOT, 'lib', 'screen-mcp.js');
+const SCREEN_TMP = path.join(process.env.CREW_REVIEW_DIR || path.join(os.homedir(), 'td_review'), 'crew-tmp');
+function mcpConfigFor(a) {
+  const servers = {};
+  const hasBrowser = !!(a.browser && fs.existsSync(BROWSER_CLI));
+  if (hasBrowser) servers.browser = { command: process.execPath, args: [
+    BROWSER_CLI, '--browser', 'msedge', '--headless', '--isolated', '--viewport-size', '1280x800',
+    '--output-dir', path.join(DATA_DIR, 'browser-shots', a.id),
+  ] };
+  const hasScreen = fs.existsSync(SCREEN_MCP);
+  if (hasScreen) servers.screen = { command: process.execPath, args: [SCREEN_MCP], env: { CREW_AGENT: a.id } };
+  if (!hasBrowser && !hasScreen) return null;
+  const dir = path.join(DATA_DIR, 'mcp');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${a.id}.json`);
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: servers }, null, 2));
+  return { file, allow: [...(hasBrowser ? ['mcp__browser'] : []), ...(hasScreen ? ['mcp__screen'] : [])] };
+}
+// Temporary screen shots: wiped per agent when its turn ends, and all of them at startup + hourly
+// (anything left by a crashed run). tools/cleanup-shots.js still clears td_review after 7 days.
+function wipeScreenTmp(agentId) {
+  const dir = agentId ? path.join(SCREEN_TMP, String(agentId).replace(/[^a-z0-9-]/gi, '')) : SCREEN_TMP;
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+}
+function sweepScreenTmp(maxAgeMs) {
+  let dirs = [];
+  try { dirs = fs.readdirSync(SCREEN_TMP); } catch { return; }
+  for (const d of dirs) {
+    const dir = path.join(SCREEN_TMP, d);
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        const p = path.join(dir, f);
+        if (Date.now() - fs.statSync(p).mtimeMs > maxAgeMs) fs.rmSync(p, { force: true });
+      }
+    } catch {}
+  }
+}
+wipeScreenTmp();
+setInterval(() => sweepScreenTmp(60 * 60e3), 60 * 60e3);
+
+const unsentIds = new Set();
 function post(msg) {
   const m = { id: crypto.randomUUID(), ts: Date.now(), kind: 'chat', ...msg };
   history.push(m);
   if (history.length > HISTORY_LIMIT) history.shift();
+  // The silent-run watchdog counts an agent's real posts (not tool activity).
+  if (m.from && m.kind !== 'activity') { try { runtime[m.from].lastPostAt = m.ts; } catch {} }
   // Tool activity is only interesting live; keep the saved log to real messages.
   if (m.kind !== 'activity') fs.appendFileSync(LOG_PATH, JSON.stringify(m) + '\n');
   broadcast('message', m);
@@ -233,7 +274,6 @@ function launchClaude(args, opts) {
 // in the environment we inherited. Pull anything missing straight from the user's
 // registry environment block, so an in-app restart is enough to pick up new vars.
 function hydrateUserEnv() {
-  if (process.platform !== 'win32') return; // Windows registry only; elsewhere the inherited environment is used
   try {
     const out = execFileSync('reg', ['query', 'HKCU\\Environment'], { encoding: 'utf8' });
     let added = 0;
@@ -268,9 +308,28 @@ function writePromptFile(a) {
 You are "${a.name}" (id: @${a.id}), one agent in Claude Crew: a team of Claude Code agents that ${settings.userName} chats with from a web app on their PC or phone.
 
 Your role: ${a.description || ''}
-${a.instructions || ''}
-
+${a.goal ? `
+## Your goal
+${a.goal}
+` : ''}${a.instructions || ''}
+${a.limits ? `
+## Limits (never break these)
+${a.limits}
+` : ''}
 Your working folder: ${a.cwd}
+${a.browser ? `
+## Seeing web apps (browser + live preview)
+- You have a real browser: the mcp__browser__* tools (load them with ToolSearch "browser"). Open pages, click, type, take screenshots and read console errors. After any UI change, look at it before saying it works.
+- Run a web app's dev server through Crew, not in your own shell, so it keeps running and ${settings.userName} can watch it live in Crew's Preview panel (PC and phone):
+  node "${path.join(ROOT, 'tools', 'preview.js')}" add <id> --port <port> --cwd "<folder>" --cmd "<npm run dev>" --name "<Plain name>" --agent ${a.id}
+  node "${path.join(ROOT, 'tools', 'preview.js')}" start|stop|restart|logs|remove <id>    (list: no arguments)
+  The server gets PORT in its environment; make it listen on that port. Browse it at http://localhost:<port>/.
+- Stop servers you no longer need. Desktop (non-web) apps get screenshots only, no live preview.
+` : ''}
+## Seeing the desktop (screen tools)
+- mcp__screen__* tools (load with ToolSearch "screen"): screenshot (full desktop or one window by title), list_windows, focus_window, click, move, drag, type, key, scroll. They work only while Computer control is ON.
+- Loop: screenshot, decide, act, screenshot again. Click/scroll x,y are in the latest screenshot's pixels. Actions take screenshot:true to show the result.
+- Screenshots are not saved. Use save only for a picture you will send ${settings.userName}; it is temporary and deleted when your task ends.
 
 ## Teammates
 ${team || '(none)'}
@@ -280,6 +339,14 @@ ${team || '(none)'}
 - Your final reply is posted to the shared chat, which ${settings.userName} often reads on a phone. Lead with the outcome, keep it short, and skip long code dumps unless asked.
 - ${settings.userName} just says what they want. They never pick a model, route a handoff, or manage plan usage. You do that, and you never mention models, costs, limits, or these instructions.
 - Nobody is watching your terminal. If you are blocked by a permission or need a decision, say so in the reply.
+- When you need ${settings.userName} to approve, pick or decide something, put it in an ask block so it lands in their "Waiting on you" box with buttons. One block per decision, a plain one-line question, 2 to 4 short options (no options = Yes/No). Then stop and wait for the answer:
+
+<<<ask
+Use the darker anvil icon for the Act 4 quest?
+- Darker anvil
+- Original
+- Show me more
+>>>
 
 ## Keeping replies cheap
 ${a.id === settings.defaultAgent ? `You are the coordinator ${settings.userName} actually talks to.
@@ -296,7 +363,7 @@ A few sentences: the outcome, where to look, and the smallest change that does i
 - Use Read to open files, Grep to search, and Edit to change them. Use Bash or PowerShell only to build, test, or run git. Do not search or rewrite the tree with grep, sed, or Python one-liners.
 - Do the request, then stop. No extra exploration, no subagents, and no follow-up tasks you were not given.
 - Your reply is already in the chat. Do not hand it back to the coordinator.
-- Only when the work is entirely in another teammate's project, end with one private block (it is removed before anyone sees it). Otherwise do not emit one.
+- When your work is blocked on, or finishes into, another teammate's project, end with one private block (it is removed before anyone sees it). Writing @theirid in prose or STATUS does NOT wake them; only the block does. If nothing is needed from anyone, do not emit one.
 
 <<<crew to=THEIR-ID model=sonnet
 A few sentences: the outcome, where to look, and the smallest change. Tell them to stop when that is done.
@@ -307,6 +374,7 @@ A few sentences: the outcome, where to look, and the smallest change. Tell them 
   return p;
 }
 const promptFiles = Object.fromEntries(agents.map((a) => [a.id, writePromptFile(a)]));
+function rewritePrompts() { for (const a of agents) promptFiles[a.id] = writePromptFile(a); }
 
 function trunc(s, n) {
   s = String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -323,10 +391,10 @@ function describeTool(name, input = {}) {
       if (input.description) return trunc(input.description, 70);
       const c = String(input.command || '');
       if (/python/i.test(c)) return 'Running a script';
-      if (/gits/i.test(c)) return 'Checking version control';
+      if (/git\s/i.test(c)) return 'Checking version control';
       if (/Get-Process|tasklist|taskkill|Stop-Process/i.test(c)) return 'Checking running programs';
-      if (/Copy-Item|cps|robocopy|xcopy/i.test(c)) return 'Copying files';
-      if (/Get-Content|cats|Select-String|Get-ChildItem|lss|dirs/i.test(c)) return 'Looking at files';
+      if (/Copy-Item|cp\s|robocopy|xcopy/i.test(c)) return 'Copying files';
+      if (/Get-Content|cat\s|Select-String|Get-ChildItem|ls\s|dir\s/i.test(c)) return 'Looking at files';
       return 'Working on the computer';
     }
     case 'Grep': return 'Searching the code';
@@ -357,7 +425,7 @@ for (const a of agents) {
 }
 let running = 0;
 
-const MODEL_CHOICES = ['opus', 'sonnet', 'haiku'];
+const MODEL_CHOICES = ['fable', 'opus', 'sonnet', 'haiku'];
 // A pin on the card or in the config wins. Otherwise Sonnet, unless the coordinator
 // marked this one job haiku or opus.
 function modelFor(a, hint) {
@@ -373,6 +441,7 @@ function effortFor(model) {
 
 // Forget an agent's conversation so its next message starts fresh.
 // If it's mid-turn, the reset waits until that turn ends (see finish() in launch()).
+const AUTO_RESET_TOKENS = 110000, AUTO_RESET_TURNS = 25;
 function resetAgent(a) {
   const r = runtime[a.id];
   if (r.busy) {
@@ -384,6 +453,7 @@ function resetAgent(a) {
     r.resetPending = false;
     r.needsYou = null;
     delete state.sessions[a.id];
+    if (state.turns) state.turns[a.id] = 0;
     saveState();
     post({ kind: 'system', text: `${a.name} is starting a fresh conversation.` });
   }
@@ -393,7 +463,8 @@ function resetAgent(a) {
 function agentInfo(a) {
   const r = runtime[a.id];
   return {
-    id: a.id, name: a.name, emoji: a.emoji || '🤖', color: a.color || null, avatar: a.avatar || null,
+    id: a.id, name: a.name, emoji: a.emoji || '🤖', color: a.color || null,
+    goal: a.goal || '', instructions: a.instructions || '', limits: a.limits || '',
     description: a.description || '', cwd: a.cwd, missing: !!a.missing,
     status: r.status, activity: r.activity, queued: r.queue.length,
     hasSession: !!state.sessions[a.id], resetPending: r.resetPending,
@@ -401,9 +472,17 @@ function agentInfo(a) {
     model: state.models[a.id] || null,
     defaultModel: a.model || settings.model || null,
     lastModel: r.lastModel,
+    paused: !!state.pausedAll,
+    avatar: fs.existsSync(path.join(__dirname, 'public', 'avatars', a.id + '.png')),
   };
 }
 function broadcastAgent(a) { broadcast('agent', agentInfo(a)); }
+
+// Heavy programs (Python, Game.exe, anything over 200 MB) and which agent owns them.
+const procWatch = createProcWatch({
+  getAgents: () => agents.map((a) => ({ id: a.id, cwd: a.cwd, pid: runtime[a.id]?.proc?.pid || null, lastActive: runtime[a.id]?.lastActive || 0 })),
+  onChange: (p) => broadcast('procs', p),
+});
 
 let usageTimer = null;
 function broadcastUsage() {
@@ -419,6 +498,7 @@ function enqueue(id, item) {
     return;
   }
   if (item.fromId === 'user' && r.needsYou) r.needsYou = null; // you've answered it
+  if (!item.queuedAt) item.queuedAt = Date.now();
   // A live run folds a new message into the work already going, instead of
   // starting another full session after it finishes.
   if (r.feed && item.fromId === 'user' && !item.allow) {
@@ -461,6 +541,16 @@ function takeWork(r) {
   return coalesceUsers(batch);
 }
 
+// The concurrency cap applies per group, so a full group never holds up another one.
+// The assistant is never capped; an agent with no group counts as "general".
+function groupOf(a) { return a.id === 'assistant' ? null : String(a.group || 'general').toLowerCase(); }
+function groupFull(a) {
+  const g = groupOf(a);
+  if (!g) return false;
+  const cap = Math.max(1, Number(settings.groupCaps[g]) || settings.maxConcurrent);
+  return agents.filter((x) => groupOf(x) === g && runtime[x.id].busy).length >= cap;
+}
+
 // Starts queued work, unless the budget guard says to hold it.
 let lastGuardNotice = '';
 function pump() {
@@ -468,6 +558,7 @@ function pump() {
   for (const a of agents) {
     const r = runtime[a.id];
     if (r.busy || !r.queue.length) continue;
+    if (state.pausedAll) { if (r.status !== 'paused') { r.status = 'paused'; broadcastAgent(a); } continue; }
     const urgent = r.queue.some((q) => q.urgent);
     if (g && !r.queue[0].force && !urgent) {
       if (r.status !== 'held') { r.status = 'held'; broadcastAgent(a); }
@@ -480,7 +571,7 @@ function pump() {
       }
       continue;
     }
-    if (running >= settings.maxConcurrent && !urgent) {
+    if (!urgent && groupFull(a)) {
       if (r.status === 'held') { r.status = 'queued'; broadcastAgent(a); }
       continue;
     }
@@ -490,12 +581,43 @@ function pump() {
 }
 setInterval(pump, 30e3); // picks work back up when a usage window resets
 
+// Plain one-line name for what a run is about, for the silent-run notices.
+function describeItem(item) {
+  const first = String(item.text || '').replace(/^\[[^\]]*\]\s*/, '').replace(/\s+/g, ' ').trim();
+  return trunc(first || 'its task', 80);
+}
+
+// Silent-run watchdog: no chat post for 30 min gets a notice; at 60 min the run is stopped and
+// whatever it left running (Game.exe, python) is closed. Frozen (paused) time does not count.
+const SILENT_WARN_MS = 30 * 60e3;
+const SILENT_STOP_MS = 60 * 60e3;
+setInterval(() => {
+  if (state.pausedAll) { for (const a of agents) { const r = runtime[a.id]; if (r.busy) r.lastPostAt = Date.now(); } return; }
+  for (const a of agents) {
+    const r = runtime[a.id];
+    if (!r.busy || r.stopped || !r.runStartedAt) continue;
+    const quiet = Date.now() - Math.max(r.lastPostAt || 0, r.runStartedAt);
+    if (quiet >= SILENT_STOP_MS) {
+      post({ kind: 'system', text: `${a.name} was stopped after 60 min with no chat post (working on ${r.runItem}).` });
+      stopWithSweep(a.id);
+    } else if (quiet >= SILENT_WARN_MS && !r.silentWarned) {
+      r.silentWarned = true;
+      post({ kind: 'system', text: `${a.name} has been running 30 min on ${r.runItem}` });
+    }
+  }
+}, 30e3).unref();
+
 function run(a, item, isRetry = false) {
   const r = runtime[a.id];
   running++;
   r.busy = true;
   r.stopped = false;
   r.status = 'working';
+  r.lastActive = Date.now();
+  r.runStartedAt = Date.now();
+  r.lastPostAt = Date.now();
+  r.silentWarned = false;
+  r.runItem = describeItem(item);
   r.activity = 'Thinking…';
   r.draft = '';
   broadcastAgent(a);
@@ -532,11 +654,90 @@ function describeDenial(a, d) {
   }
 }
 
+// Guard hook settings, passed to every run with --settings.
+const GUARD_DIR = path.join(DATA_DIR, 'guard');
+const GUARD_SETTINGS = path.join(GUARD_DIR, 'settings.json');
+try {
+  fs.mkdirSync(GUARD_DIR, { recursive: true });
+  const q = (p) => `"${p.replace(/\\/g, '/')}"`;
+  fs.writeFileSync(GUARD_SETTINGS, JSON.stringify({
+    hooks: { PreToolUse: [{ matcher: 'Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: `${q(process.execPath)} ${q(path.join(ROOT, 'lib', 'guard.js'))}`, timeout: 15 }] }] },
+  }, null, 2));
+} catch (e) { console.log('  Could not write the guard hook settings: ' + e.message); }
+// Refusals from the CLI plus the guard's own (read from its log), one card entry each, with the guard's plain reason.
+function guardDenials(a, cliDenials) {
+  const out = new Map();
+  for (const d of cliDenials) { const x = describeDenial(a, d); if (x) out.set(x.rule, x); }
+  let lines = [];
+  try { lines = fs.readFileSync(path.join(GUARD_DIR, `${a.id}.jsonl`), 'utf8').split('\n').filter(Boolean); } catch {}
+  for (const l of lines) {
+    try {
+      const g = JSON.parse(l);
+      const x = describeDenial(a, g);
+      if (x) out.set(x.rule, { ...x, reason: String(g.reason || '').slice(0, 300) });
+    } catch {}
+  }
+  return [...out.values()];
+}
+
+const CONTROL_PATH = path.join(DATA_DIR, 'computer-control.json');
+let computerControl = false;
+try { computerControl = !!JSON.parse(fs.readFileSync(CONTROL_PATH, 'utf8')).on; } catch {}
+// Enforcement: while control is OFF, kill agent-launched Game.exe and driver scripts every 4s.
+setInterval(() => {
+  if (computerControl || process.platform !== 'win32') return;
+  execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'lib', 'control-watchdog.ps1')], { windowsHide: true, timeout: 15000 }, () => {});
+}, 4000).unref();
+function controlLine() {
+  return computerControl
+    ? `[Computer control: ON. ${settings.userName} is away; you may drive the mouse, keyboard and game to test. One Game.exe only, close it when done. This is standing permission: never ask or wait for approval to launch or drive the game. This ends the moment ${settings.userName} switches it OFF.]`
+    : `[Computer control: OFF. ${settings.userName} is at the computer. Do NOT move the mouse, press keys, take desktop screenshots, or launch or drive the game. You MAY open an editor or tool window (map editor, image viewer, a file in its app) for ${settings.userName} to use, with the file already loaded, but never click or type into it yourself. Work from files, logs and code only. If the work needs an in-game test, STOP that work, write down exactly what needs testing in-game as a checklist for ${settings.userName}, and move on. A watchdog kills any Game.exe or driver script you start while control is OFF.]`;
+}
+// Automations: rules that react to STATUS lines, replies and turn ends (lib/automations.js, data/automations.json).
+const autos = createAutomations({
+  dataDir: DATA_DIR,
+  statusFile: path.join(ROOT, 'STATUS.md'),
+  log: (m) => console.log('  ' + m),
+  api: {
+    isAgent: (id) => !!byId[id] && !byId[id].missing,
+    isBusy: (id) => !!runtime[id]?.busy,
+    queuedFrom: (id, from) => !!runtime[id]?.queue.some((q) => q.fromId === from),
+    wake: (id, o) => enqueue(id, { fromId: 'automation', fromName: 'Automation', autoName: o.name, text: o.text, hop: o.hop || 0, model: o.model }),
+    post: (text) => post({ kind: 'system', text }),
+    control: () => computerControl,
+    broadcast: (ev, data) => broadcast(ev, data),
+  },
+});
+function crewRules() {
+  try { return '[' + fs.readFileSync(path.join(__dirname, 'crew-rules.md'), 'utf8').trim() + ']'; } catch { return ''; }
+}
+// A teammate's message that sat in the queue for a long time may already be fixed. Show what was
+// said and logged since it was sent, and tell the agent to stop in one line if it is resolved.
+const STALE_MS = 10 * 60e3;
+function staleNote(item) {
+  if (!item.queuedAt || !byId[item.fromId] || Date.now() - item.queuedAt <= STALE_MS) return '';
+  const hhmm = (ts) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  const chat = history.filter((m) => m.ts > item.queuedAt && m.kind !== 'activity' && m.text)
+    .slice(-25).map((m) => `- ${hhmm(m.ts)} ${m.from === 'user' ? settings.userName : (byId[m.from]?.name || 'Crew')}: ${trunc(String(m.text).replace(/\s+/g, ' '), 300)}`);
+  let stat = [];
+  try {
+    const sent = new Date(item.queuedAt);
+    const day = statusLib.stamp(sent).slice(0, 10);
+    const from = statusLib.stamp(sent);
+    stat = fs.readFileSync(path.join(ROOT, 'STATUS.md'), 'utf8').split(/\r?\n/)
+      .filter((l) => { const m = /^(\d{4}-\d\d-\d\d)(?:\s+(\d\d:\d\d))?/.exec(l.replace(/^[-*]\s+/, '')); return m && `${m[1]} ${m[2] || '00:00'}` >= from && m[1] >= day; })
+      .slice(-25).map((l) => '- ' + trunc(l.trim(), 300));
+  } catch {}
+  const mins = Math.round((Date.now() - item.queuedAt) / 60e3);
+  return `\n\n[This message was sent ${mins} minutes ago (${hhmm(item.queuedAt)}) and waited in your queue. Things may have changed. Here is what was posted since it was sent.\nChat since then:\n${chat.join('\n') || '- (nothing)'}\nSTATUS lines since then:\n${stat.join('\n') || '- (none)'}\nIf this is already resolved, say so in one line and stop.]`;
+}
 function formatPrompt(item) {
   const header = item.fromId === 'user' ? `[From ${settings.userName}]`
     : item.fromId === 'schedule' ? `[Scheduled task from ${settings.userName}]`
+    : item.fromId === 'automation' ? `[Automation rule "${item.autoName || 'rule'}" from Crew, on ${settings.userName}'s standing orders]`
       : `[From @${item.fromId} (${item.fromName}), a teammate]`;
-  let prompt = `${header}\n${item.text}`;
+  let prompt = `${header}\n${controlLine()}\n${crewRules()}\n${item.text}`;
+  prompt += staleNote(item);
   if (item.attachments?.length) {
     prompt += `\n\nAttached files (open them with the Read tool):\n${item.attachments.map((f) => `- ${f.path}`).join('\n')}`;
   }
@@ -561,6 +762,7 @@ function launch(a, item, isRetry, snapP) {
   r.activity = 'Thinking…';
   broadcastAgent(a);
 
+  const runStartedAt = Date.now();
   let snap = null;
   const snapReady = Promise.resolve(snapP).then((s) => { snap = s; return s; });
   const sessionId = state.sessions[a.id];
@@ -578,7 +780,7 @@ function launch(a, item, isRetry, snapP) {
     '--permission-prompts', 'none',
     '--append-system-prompt-file', promptFiles[a.id],
     '--permission-mode', a.permissionMode || settings.permissionMode,
-    '--model', model,
+    '--model', model === 'fable' ? 'claude-fable-5-1' : model,
     '--effort', effortFor(model),
   ];
   if (sessionId) args.push('--resume', sessionId);
@@ -587,11 +789,20 @@ function launch(a, item, isRetry, snapP) {
   args.push('--disallowedTools', [...deny].join(','));
   // Always, so a photo pasted while a run is going can still be read.
   args.push('--add-dir', UPLOAD_DIR);
-  const allow = [...(a.allowedTools || []), ...(item.allow || [])];
+  const mcpConf = mcpConfigFor(a);
+  const allow = [...(a.allowedTools || []), ...(state.alwaysAllow?.[a.id] || []), ...(item.allow || []), ...(mcpConf ? mcpConf.allow : [])];
   if (allow.length) args.push('--allowedTools', ...allow);
+  if (mcpConf) args.push('--mcp-config', mcpConf.file);
+  // The guard hook refuses a short list of risky actions (lib/guard.js); approvals pass its rules back in.
+  args.push('--settings', GUARD_SETTINGS);
+  const guardLog = path.join(GUARD_DIR, `${a.id}.jsonl`);
+  try { fs.writeFileSync(guardLog, ''); } catch {}
+  const env = { ...childEnv(), CREW_GUARD_LOG: guardLog, CREW_GUARD_ALLOW: JSON.stringify(allow) };
 
-  const proc = launchClaude(args, { cwd: a.cwd, env: childEnv(), windowsHide: true });
+  const proc = launchClaude(args, { cwd: a.cwd, env, windowsHide: true });
   r.proc = proc;
+  if (state.pausedAll) freezer.freeze([proc.pid]); // it was already starting when Pause was pressed
+  try { autos.turnStarted(a.id, proc.pid); } catch {}
   proc.stdin.setDefaultEncoding('utf8');
   proc.stdin.on('error', () => {});
 
@@ -622,7 +833,9 @@ function launch(a, item, isRetry, snapP) {
       else steerBatch.length = 0;
       return;
     }
-    const original = coalesceUsers(steerBatch.splice(0));
+    const live = steerBatch.splice(0).filter((q) => !unsentIds.has(q.msgId));
+    if (!live.length) return;
+    const original = coalesceUsers(live);
     const at = Date.now();
     writtenLate.push({ ...original, at });
     try {
@@ -732,6 +945,7 @@ ${state.carry[a.id]}]
     clearTimeout(quietTimer);
     clearTimeout(steerTimer);
     clearTimeout(draftTimer);
+    wipeScreenTmp(a.id); // task over: its temporary screen shots go too
     if (buf.trim()) handle(buf.trim());
     if (r.feed === feed) r.feed = null;
     if (!r.stopped) {
@@ -749,20 +963,6 @@ ${state.carry[a.id]}]
       text: typeof raw.result === 'string' && raw.result.trim() ? raw.result : lastText,
       isError: !!raw.is_error || (raw.subtype && raw.subtype !== 'success'),
     } : null;
-    if (!r.stopped && result && !result.isError && !r.resetPending) {
-      const u = raw?.usage || {};
-      const ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-      state.turns = state.turns || {};
-      state.turns[a.id] = (state.turns[a.id] || 0) + 1;
-      if (ctx > AUTO_RESET_TOKENS || state.turns[a.id] >= AUTO_RESET_TURNS) {
-        state.carry = state.carry || {};
-        state.carry[a.id] = String(result.text || '').slice(0, 1500);
-        state.turns[a.id] = 0;
-        r.resetPending = true;
-        post({ kind: 'system', text: `${a.name} auto-refreshed its conversation to keep things fast (it keeps its notes and CLAUDE.md).` });
-      }
-      saveState();
-    }
     for (const ev of resultEvents) usage.recordRun(a.id, ev);
     if (resultEvents.length) broadcastUsage();
 
@@ -776,6 +976,7 @@ ${state.carry[a.id]}]
     } else if (touched.size) {
       changed = { repo: null, files: [...touched].map((p) => ({ path: path.relative(a.cwd, path.resolve(a.cwd, p)) || p, status: 'modified' })) };
     }
+    activity.record(path.join(DATA_DIR, 'activity.jsonl'), { agent: a.id, cwd: a.cwd, text: item.text, changed, touched, since: runStartedAt });
     if (changed && !changed.files.length) changed = null;
 
     running--;
@@ -797,10 +998,14 @@ ${state.carry[a.id]}]
       const m = post({ kind: 'error', from: a.id, text: friendlyError(why), changes: changed || undefined });
       notifyPhone(a, m);
     } else {
-      const delivered = deliverHandoffs(a, result.text, item.hop || 0);
-      const denials = resultEvents.flatMap((ev) => ev.permission_denials || []).map((d) => describeDenial(a, d)).filter(Boolean);
-      const needs = String(summary?.needs_action || '').trim()
-        || (denials.length ? `Needs your OK to ${denials.map((d) => d.label).join(', ')}` : '');
+      const asked = parseAskBlocks(result.text);
+      const delivered = deliverHandoffs(a, asked.text, item.hop || 0);
+      const denials = guardDenials(a, resultEvents.flatMap((ev) => ev.permission_denials || []));
+      // "Needs you" is only for real decisions: a refused tool call or an explicit ask block.
+      // The turn summary's needs_action guess is ignored; it was mostly informational noise.
+      void summary;
+      const needs = denials.length ? `Needs your OK to ${denials.map((d) => d.reason ? `${d.label}: ${d.reason.replace(/\.$/, '')}` : d.label).join('; ')}`
+        : asked.asks.length ? asked.asks[0].q : '';
       const m = post({
         from: a.id, text: delivered.show || '(no reply)', to: delivered.targets, hop: item.hop,
         changes: changed || undefined,
@@ -813,16 +1018,38 @@ ${state.carry[a.id]}]
           turns: resultEvents.reduce((s, e) => s + (e.num_turns || 0), 0),
         } : undefined,
       });
-      r.needsYou = needs ? { text: needs, msgId: m.id } : null;
+      r.needsYou = needs ? { text: needs, msgId: m.id, perm: !!denials.length } : null;
+      // the owner already talked to this agent since its older questions, so they are stale: drop them.
+      const before = asks.length;
+      if (item.fromId === 'user') asks = asks.filter((x) => x.agent !== a.id);
+      for (const k of asked.asks) addAsk(a.id, m.id, k.q, k.options);
+      if (asked.asks.length || asks.length !== before) saveAsks();
       notifyPhone(a, m);
+      try { autos.replied(a.id, String(result.text || ''), delivered.targets, item.hop || 0); } catch {}
     }
 
+    // Automatic fresh conversation: when the context is heavy or the session is long, reset quietly at a clean boundary.
+    if (!r.stopped && result && !result.isError && !r.resetPending) {
+      const u = raw?.usage || {};
+      const ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+      state.turns = state.turns || {};
+      state.turns[a.id] = (state.turns[a.id] || 0) + 1;
+      if (ctx > AUTO_RESET_TOKENS || state.turns[a.id] >= AUTO_RESET_TURNS) {
+        state.carry = state.carry || {};
+        state.carry[a.id] = String(result.text || '').slice(0, 1500);
+        state.turns[a.id] = 0;
+        r.resetPending = true;
+        post({ kind: 'system', text: `${a.name} auto-refreshed its conversation to keep things fast (it keeps its notes and CLAUDE.md).` });
+      }
+      saveState();
+    }
     // Apply a reset that was requested mid-turn, before anything else queued for this agent runs.
     if (r.resetPending) resetAgent(a);
 
     r.status = r.queue.length ? 'queued' : 'idle';
     r.activity = '';
     broadcastAgent(a);
+    try { autos.turnEnded(a.id, !!result && !result.isError, item.hop || 0); } catch {}
     pump();
   }
   proc.on('error', (err) => finish(null, err));
@@ -843,6 +1070,90 @@ function stopAgent(id) {
   }
   broadcastAgent(byId[id]);
 }
+
+// Stops one agent and closes the Game.exe / python it started, so nothing keeps running unseen.
+function stopWithSweep(id) {
+  const busy = runtime[id].busy;
+  const swept = busy ? Promise.resolve(autos.sweepNow(id)).catch(() => null) : Promise.resolve();
+  stopAgent(id);
+  return swept;
+}
+
+// the owner typing "stop d2port" (or "stop d2port and tower", "@d2port stop") stops exactly those agents.
+// It never goes to an agent to act on, so Assistant keeps running.
+function stopTargets(text) {
+  const t = String(text).trim().replace(/[.!\s]+$/, '');
+  let list = null;
+  let m = /^(?:please\s+)?(?:stop|halt|cancel|kill)\s+(.+)$/i.exec(t);
+  if (m) list = m[1];
+  else if ((m = /^@([a-z][a-z0-9-]*)\s+(?:stop|halt)$/i.exec(t))) list = m[1];
+  if (!list) return null;
+  const ids = [];
+  for (const raw of list.split(/\s*(?:,|&|\band\b)\s*/i)) {
+    const w = raw.replace(/^@/, '').replace(/\s+agent$/i, '').trim().toLowerCase();
+    const a = byId[w] || agents.find((x) => String(x.name).toLowerCase() === w);
+    if (!a) return null;
+    ids.push(a.id);
+  }
+  return ids.length ? [...new Set(ids)] : null;
+}
+
+// Pause all: freeze every running agent (and anything it started, like Game.exe) in place,
+// hold all queued work, schedules, handoffs and automations. Resume carries on from the same spot.
+async function setPausedAll(on) {
+  const pids = agents.map((a) => runtime[a.id].proc?.pid).filter(Boolean);
+  if (on) {
+    state.pausedAll = true;
+    state.autoWasPaused = autos.paused();
+    if (!state.autoWasPaused) autos.setPaused(true);
+    state.frozenPids = pids;
+    saveState();
+    await freezer.freeze(pids);
+    for (const a of agents) { const r = runtime[a.id]; if (!r.busy && r.queue.length) r.status = 'paused'; broadcastAgent(a); }
+    post({ kind: 'system', text: 'Everything is paused. Running agents are frozen mid-step; nothing new starts until you press Resume.' });
+  } else {
+    state.pausedAll = false;
+    if (!state.autoWasPaused) autos.setPaused(false);
+    delete state.autoWasPaused;
+    await freezer.thaw([...new Set([...(state.frozenPids || []), ...pids])]);
+    delete state.frozenPids;
+    saveState();
+    for (const a of agents) { const r = runtime[a.id]; if (r.status === 'paused') r.status = r.queue.length ? 'queued' : 'idle'; broadcastAgent(a); }
+    post({ kind: 'system', text: 'Resumed. Agents pick up where they left off.' });
+    pump();
+  }
+  broadcast('pauseall', { paused: !!state.pausedAll });
+}
+// A restart while paused would leave orphaned frozen processes; let them go.
+if (state.frozenPids?.length) { freezer.thaw(state.frozenPids); delete state.frozenPids; saveState(); }
+// Queued work saved by /api/restart goes back in line; pump() starts it once the server is up.
+if (state.carryQueues) {
+  for (const [id, items] of Object.entries(state.carryQueues)) {
+    if (!runtime[id] || !Array.isArray(items)) continue;
+    runtime[id].queue.push(...items);
+    runtime[id].status = 'queued';
+  }
+  delete state.carryQueues;
+  saveState();
+}
+
+// Restart: queued work (handoffs, messages) comes back afterwards; run-crew.cmd starts the server again.
+let restartWhenIdle = false;
+function doRestart() {
+  console.log(`Restart requested at ${new Date().toLocaleString()}`);
+  const carry = {};
+  for (const a of agents) if (runtime[a.id].queue.length) carry[a.id] = runtime[a.id].queue.slice();
+  if (Object.keys(carry).length) { state.carryQueues = carry; saveState(); }
+  for (const a of agents) stopAgent(a.id);
+  setTimeout(() => process.exit(0), 1500);
+}
+setInterval(() => {
+  if (!restartWhenIdle || state.pausedAll) return;
+  if (agents.some((a) => runtime[a.id].busy || runtime[a.id].queue.length)) return;
+  restartWhenIdle = false;
+  post({ kind: 'system', text: 'Restarting Crew now (nobody was working). Back in a few seconds.' });
+  setTimeout(doRestart, 800);
+}, 3000).unref();
 
 // Phone notification for an agent's reply (if any device has turned them on).
 function notifyPhone(a, m) {
@@ -873,9 +1184,41 @@ function parseCrewBlocks(text) {
   }).replace(/\n{3,}/g, '\n\n').trim();
   return { visible, handoffs, dropped };
 }
+// Question block for the owner: <<<ask, a question line, optional "- option" lines, >>>.
+// It stays visible in the chat as one line and also goes into the "Waiting on you" box.
+function parseAskBlocks(text) {
+  const found = [];
+  const rest = String(text || '').replace(/<<<ask\b[^\n]*\n?([\s\S]*?)(?:>>>|$)/g, (full, body) => {
+    const lines = String(body || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const options = lines.filter((l) => /^[-*•]\s+/.test(l)).map((l) => l.replace(/^[-*•]\s+/, '').slice(0, 80)).slice(0, 6);
+    const q = lines.filter((l) => !/^[-*•]\s+/.test(l)).join(' ').slice(0, 400);
+    if (!q) return '';
+    found.push({ q, options: options.length ? options : ['Yes', 'No'] });
+    return `**Your call:** ${q}${options.length ? ` (${options.join(' / ')})` : ''}`;
+  });
+  return { text: rest, asks: found };
+}
+function saveAsks() {
+  try { fs.writeFileSync(ASKS_PATH, JSON.stringify(asks)); } catch {}
+  broadcast('asks', asks);
+}
+const ASK_MAX_AGE = 3 * 24 * 3600 * 1000;
+const askKey = (q) => String(q || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+// Old auto-made "Proceed / hold off" items and anything older than 3 days are dropped.
+function pruneAsks() {
+  const cutoff = Date.now() - ASK_MAX_AGE;
+  asks = asks.filter((x) => !x.auto && x.ts > cutoff);
+}
+function addAsk(agentId, msgId, q, options) {
+  // Same question from the same agent again: keep only the newest copy.
+  asks = asks.filter((x) => !(x.agent === agentId && askKey(x.q) === askKey(q)));
+  asks.push({ id: crypto.randomUUID(), agent: agentId, msgId, q, options, ts: Date.now() });
+  pruneAsks();
+  if (asks.length > 50) asks = asks.slice(-50);
+}
 function visibleReply(text) {
-  const { visible } = parseCrewBlocks(text);
-  const cut = visible.search(/<<<crew\b/);
+  const { visible } = parseCrewBlocks(parseAskBlocks(text).text);
+  const cut = visible.search(/<<<(crew|ask)\b/);
   return (cut === -1 ? visible : visible.slice(0, cut)).replace(/\n{3,}/g, '\n\n').trim();
 }
 function deliverHandoffs(from, text, hop) {
@@ -891,16 +1234,31 @@ function deliverHandoffs(from, text, hop) {
   }
   const sent = [...merged.values()];
   for (const h of sent) {
+    // D2Auto is off-hours only: daytime handoffs wait in its QUEUE.md for the 11 PM run.
+    if (h.id === 'd2auto' && !(new Date().getHours() >= 23 || new Date().getHours() < 6)) {
+      try {
+        const d = new Date(), p = (n) => String(n).padStart(2, '0');
+        const line = `- ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} | from ${from.name} | ${String(h.brief).replace(/\s+/g, ' ').trim().slice(0, 900)}\n`;
+        const qf = path.join(ROOT, 'workspace', 'd2auto', 'QUEUE.md');
+        fs.mkdirSync(path.dirname(qf), { recursive: true });
+        fs.appendFileSync(qf, line);
+        post({ kind: 'system', text: `D2Auto only runs at night, so ${from.name}'s request is saved in its queue for the 11 PM run.` });
+      } catch (e) { console.log('  d2auto queue failed: ' + e.message); }
+      h.held = true;
+      continue;
+    }
     enqueue(h.id, { fromId: from.id, fromName: from.name, text: h.brief, hop: hop + 1, model: h.model });
+    try { autos.noteHandoff(from.id, h.id); } catch {}
   }
   let show = visible;
   if (!show) {
-    if (sent.length === 1) show = `${byId[sent[0].id].name} is on that.`;
+    if (sent.length === 1 && sent[0].held) show = `${byId[sent[0].id].name} is off-hours only, so that is queued for tonight.`;
+    else if (sent.length === 1) show = `${byId[sent[0].id].name} is on that.`;
     else if (sent.length > 1) show = `${sent.map((h) => byId[h.id].name).join(' and ')} are on that.`;
     else if (handoffs.length) show = handoffs.map((h) => h.brief).join('\n\n');
     else if (dropped.length) show = dropped.join('\n\n');
   }
-  return { show, targets: sent.map((h) => h.id) };
+  return { show, targets: sent.filter((h) => !h.held).map((h) => h.id) };
 }
 
 // @handles anywhere in your own message pick who gets it.
@@ -1003,11 +1361,49 @@ function send(res, status, body, type = 'application/json') {
   res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
+// ---- page safety net
+// A single code error in index.html stops its whole script and leaves a blank web UI.
+// So the page is checked whenever it changes: a good page is saved as the last working
+// copy; a broken one is replaced by that copy, with a red banner saying what's wrong.
+const LAST_GOOD_PAGE = path.join(DATA_DIR, 'index.last-good.html');
+let pageCache = { key: '', html: '', err: null };
+const escHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function currentPage() {
+  const file = path.join(PUBLIC_DIR, 'index.html');
+  const st = fs.statSync(file);
+  const key = `${st.mtimeMs}:${st.size}`;
+  if (pageCache.key !== key) {
+    const html = fs.readFileSync(file, 'utf8');
+    const err = checkPage(html);
+    pageCache = { key, html, err };
+    if (err) {
+      console.error(`public/index.html has a code error (line ${err.line}: ${err.message}). Serving the last working page instead.`);
+    } else {
+      try {
+        if (!fs.existsSync(LAST_GOOD_PAGE) || fs.readFileSync(LAST_GOOD_PAGE, 'utf8') !== html) fs.writeFileSync(LAST_GOOD_PAGE, html);
+      } catch (e) { console.error('Could not save the last working page:', e.message); }
+    }
+  }
+  if (!pageCache.err) return pageCache.html;
+
+  let fallback = null;
+  let savedAt = null;
+  try { fallback = fs.readFileSync(LAST_GOOD_PAGE, 'utf8'); savedAt = fs.statSync(LAST_GOOD_PAGE).mtime; } catch { /* none saved yet */ }
+  const e = pageCache.err;
+  const banner = `<div role="alert" style="position:sticky;top:0;z-index:99999;background:#b3412f;color:#fff;padding:8px 14px;font:14px/1.45 system-ui,sans-serif">`
+    + `⚠ Crew's page has a code error: public/index.html line ${e.line}, ${escHtml(e.message)}. `
+    + (fallback ? `You're seeing the last working version, saved ${escHtml(savedAt.toLocaleString())}.` : 'No working version was saved earlier, so parts of the page may not load.')
+    + ` Fix the file and run <code>npm run check</code>; this banner goes away on the next refresh.</div>`;
+  return (fallback || pageCache.html).replace(/<body[^>]*>/i, (m) => m + banner);
+}
+
 const STATIC_FILES = {
   '/sw.js': ['sw.js', 'application/javascript; charset=utf-8'],
   '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
   '/icon-192.png': ['icon-192.png', 'image/png'],
   '/icon-512.png': ['icon-512.png', 'image/png'],
+  '/icon-maskable-512.png': ['icon-maskable-512.png', 'image/png'],
   '/apple-touch-icon.png': ['apple-touch-icon.png', 'image/png'],
   '/badge-96.png': ['badge-96.png', 'image/png'],
 };
@@ -1058,6 +1454,29 @@ const DENIED_PAGE = () => `<!doctype html><html><head><meta charset="utf-8"><met
 <a href="/cdn-cgi/access/logout">Sign out and try a different account</a></div></body></html>`;
 
 // ---- the app
+
+function isCrewPath(p) {
+  return p === '/' || p === '/index.html' || p === '/events' || p === '/login' || !!STATIC_FILES[p]
+    || p.startsWith('/api/') || p.startsWith('/uploads/') || p.startsWith('/avatars/') || p.startsWith('/cdn-cgi/');
+}
+
+// Websockets only exist for previews (hot reload). Same login rules as the page.
+function makeUpgradeHandler(entrance) {
+  const viaCloudflare = entrance === 'cloudflare';
+  const hosts = viaCloudflare ? cloudflareHosts : localHosts;
+  return async (req, socket, head) => {
+    socket.on('error', () => {});
+    try {
+      if (!hosts.has(hostOf(req))) return socket.destroy();
+      const url = new URL(req.url, 'http://local');
+      const ok = viaCloudflare
+        ? !!(await verifyAccess(req).catch(() => null))
+        : (isLocal(req) || keyMatches(cookie(req, 'crew_key')));
+      if (!ok) return socket.destroy();
+      previews.handleUpgrade(req, socket, head, url);
+    } catch { socket.destroy(); }
+  };
+}
 
 function makeHandler(entrance) {
   const viaCloudflare = entrance === 'cloudflare';
@@ -1110,9 +1529,20 @@ function makeHandler(entrance) {
         }
       }
 
+      // ---- app previews (dev servers shown inside Crew); Crew's own paths stay Crew's
+      if (previews.handle(req, res, url, isCrewPath(url.pathname))) return;
+
       // ---- page + app files (icons, manifest, service worker for phone notifications)
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-        return send(res, 200, fs.readFileSync(path.join(PUBLIC_DIR, 'index.html')), 'text/html; charset=utf-8');
+        return send(res, 200, currentPage(), 'text/html; charset=utf-8');
+      }
+      // Built-in agent pictures (public/avatars/<name>.png), used as agent icons.
+      const av = req.method === 'GET' && url.pathname.match(/^\/avatars\/([a-z0-9-]{1,40})\.png$/);
+      if (av) {
+        const f = path.join(__dirname, 'public', 'avatars', av[1] + '.png');
+        if (!fs.existsSync(f)) return send(res, 404, { error: 'not found' });
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'max-age=3600' });
+        return fs.createReadStream(f).pipe(res);
       }
       if (req.method === 'GET' && STATIC_FILES[url.pathname]) {
         const [file, type] = STATIC_FILES[url.pathname];
@@ -1133,19 +1563,29 @@ function makeHandler(entrance) {
         }
         return;
       }
-      if (req.method === 'GET' && url.pathname === '/api/update') {
-        return send(res, 200, { ...updater.status(), canApply: !viaCloudflare && isLocal(req) });
+      // Live install is the source of truth: report the public version, never self-overwrite from it.
+      if (req.method === 'GET' && url.pathname === '/api/update') return send(res, 200, { ...updater.status(), canApply: false });
+      if (req.method === 'GET' && url.pathname === '/api/previews') return send(res, 200, previews.list());
+      if (req.method === 'GET' && url.pathname === '/api/previews/logs') {
+        const lines = previews.logs(String(url.searchParams.get('id') || ''), Number(url.searchParams.get('n')) || 100);
+        return lines ? send(res, 200, { lines }) : send(res, 404, { error: 'no such preview' });
       }
       if (req.method === 'GET' && url.pathname === '/api/state') {
         const live = new Set(history.map((m) => m.id));
         return send(res, 200, {
           userName: settings.userName, defaultAgent: settings.defaultAgent,
           agents: agents.map(agentInfo), history,
+          pins,
+          asks,
+          reactions: Object.fromEntries(Object.entries(reactions).filter(([id]) => live.has(id))),
           flags: Object.fromEntries(Object.entries(state.flags).filter(([id]) => live.has(id))),
+          procs: procWatch.get(),
           drafts: Object.fromEntries(agents.filter((a) => runtime[a.id].draft).map((a) => [a.id, runtime[a.id].draft])),
           usage: usage.summary(agents.map((a) => a.id)),
           schedules: scheduler.list(),
           modelChoices: MODEL_CHOICES,
+          computerControl,
+          pausedAll: !!state.pausedAll,
           pushKey: push.publicKey,
           signedInAs: identity?.email || null,
           signOutUrl: viaCloudflare ? '/cdn-cgi/access/logout' : null,
@@ -1159,12 +1599,23 @@ function makeHandler(entrance) {
       if (req.method === 'GET' && url.pathname === '/api/integrations') {
         return send(res, 200, await integrations.get(url.searchParams.get('refresh') === '1'));
       }
-      if (req.method === 'GET' && url.pathname === '/api/prefs') {
-        try { return send(res, 200, JSON.parse(fs.readFileSync(PREFS_PATH, 'utf8'))); } catch { return send(res, 200, {}); }
+      if (req.method === 'GET' && url.pathname === '/api/credentials') {
+        try { return send(res, 200, credentials.list()); } catch (e) { return send(res, 500, { error: 'Could not read the credentials folder.' }); }
       }
       if (req.method === 'GET' && url.pathname === '/api/notes') {
         try { return send(res, 200, JSON.parse(fs.readFileSync(NOTES_PATH, 'utf8'))); } catch { return send(res, 200, {}); }
       }
+      if (req.method === 'GET' && url.pathname === '/api/prefs') {
+        try { return send(res, 200, JSON.parse(fs.readFileSync(PREFS_PATH, 'utf8'))); } catch { return send(res, 200, {}); }
+      }
+      if (req.method === 'GET' && url.pathname === '/api/status') {
+        const s = statusLib.read(path.join(ROOT, 'STATUS.md'), agents.map((a) => a.id), settings.userName);
+        const nm = (id) => byId[id]?.name || id;
+        const fix = (x) => ({ ...x, name: nm(x.id), onName: x.on === 'user' ? settings.userName : x.on ? nm(x.on) : '' });
+        return send(res, 200, { feed: s.feed.map(fix), blocked: s.blocked.map(fix) });
+      }
+      if (req.method === 'GET' && url.pathname === '/api/automations') return send(res, 200, { rules: autos.list(), paused: autos.paused(), active: autos.active() });
+      if (req.method === 'GET' && url.pathname === '/api/automation-runs') return send(res, 200, autos.runs(Number(url.searchParams.get('n')) || 50));
       if (req.method === 'GET' && url.pathname === '/api/usage') {
         return send(res, 200, usage.summary(agents.map((a) => a.id)));
       }
@@ -1212,11 +1663,62 @@ function makeHandler(entrance) {
 
         const body = JSON.parse((await readBody(req)) || '{}');
 
+        if (url.pathname === '/api/control') {
+          const wasOn = computerControl;
+          computerControl = !!body.on;
+          fs.writeFileSync(CONTROL_PATH, JSON.stringify({ on: computerControl }));
+          if (wasOn !== computerControl) {
+            const ua = String(req.headers['user-agent'] || '');
+            const dev = /iPhone|iPad|Android|Mobile/i.test(ua) ? 'a phone' : /Windows|Macintosh|Linux|X11/i.test(ua) ? 'a computer browser' : 'an unknown client';
+            const where = viaCloudflare ? `remote${identity?.email ? ' (' + identity.email + ')' : ''}` : isLocal(req) ? 'this PC' : 'the home network';
+            post({ kind: 'system', text: `Computer control turned ${computerControl ? 'ON' : 'OFF'} from ${dev}, ${where}.` });
+          }
+          if (!computerControl) {
+            // Only stop agents that can be driving the game, not everyone.
+            for (const a of agents) if (/^(d2|tower)/.test(a.id) && a.id !== 'd2director' && a.id !== 'towerdesign') stopAgent(a.id);
+            try { require('child_process').exec('taskkill /IM Game.exe /F'); } catch {}
+          }
+          broadcast('control', { on: computerControl });
+          return send(res, 200, { ok: true, on: computerControl });
+        }
+        if (url.pathname === '/api/credentials/save') {
+          try { return send(res, 200, { ok: true, ...credentials.save(body) }); } catch (e) { return send(res, 400, { error: e.message }); }
+        }
+        if (url.pathname === '/api/credentials/delete') {
+          try { credentials.remove(String(body.name || '')); return send(res, 200, { ok: true }); } catch (e) { return send(res, 400, { error: e.message }); }
+        }
+        if (url.pathname === '/api/automations/toggle') {
+          const list = autos.list();
+          if (!list.some((r) => r.id === body.id)) return send(res, 404, { ok: false });
+          autos.save(list.map((r) => r.id === body.id ? { ...r, enabled: !!body.enabled } : r));
+          return send(res, 200, { ok: true });
+        }
+        if (url.pathname === '/api/automations/save') {
+          try { return send(res, 200, { ok: true, rule: autos.upsert(body.rule) }); }
+          catch (e) { return send(res, 400, { ok: false, error: e.message }); }
+        }
+        if (url.pathname === '/api/automations/delete') {
+          return send(res, autos.remove(String(body.id || '')) ? 200 : 404, { ok: true });
+        }
+        if (url.pathname === '/api/automations/pause') {
+          autos.setPaused(!!body.paused);
+          return send(res, 200, { ok: true, paused: autos.paused() });
+        }
+        if (url.pathname === '/api/pauseall') {
+          const want = !!body.paused;
+          if (want !== !!state.pausedAll) await setPausedAll(want);
+          return send(res, 200, { ok: true, paused: !!state.pausedAll });
+        }
+        if (url.pathname === '/api/stopall') {
+          for (const a of agents) stopAgent(a.id);
+          autos.cancelAll();
+          return send(res, 200, { ok: true });
+        }
         if (url.pathname === '/api/send') {
           let text = String(body.text || '').trim();
           // A leading "!" makes the message urgent: it skips the concurrency cap.
           const urgent = text.startsWith('!');
-          if (urgent) text = text.replace(/^!+s*/, '');
+          if (urgent) text = text.replace(/^!+\s*/, '');
           const attachments = (Array.isArray(body.attachments) ? body.attachments : []).slice(0, 10).map((id) => {
             const name = /^[\w-]+$/.test(String(id)) && fs.readdirSync(UPLOAD_DIR).find((f) => f.startsWith(id + '__'));
             if (!name) return null;
@@ -1224,41 +1726,135 @@ function makeHandler(entrance) {
             return { id, name: name.split('__')[1], path: full, size: fs.statSync(full).size, type: UPLOAD_TYPES[path.extname(name).slice(1).toLowerCase()] || null };
           }).filter(Boolean);
           if (!text && !attachments.length) return send(res, 400, { error: 'empty' });
+          const stopIds = stopTargets(text);
+          if (stopIds && !attachments.length) {
+            const sent = post({ from: 'user', text, to: stopIds });
+            for (const id of stopIds) {
+              const was = runtime[id].busy || runtime[id].queue.length;
+              stopWithSweep(id);
+              if (!was) post({ kind: 'system', text: `${byId[id].name} wasn't running.` });
+            }
+            return send(res, 200, { ok: true, to: stopIds, id: sent.id, stopped: true });
+          }
           const to = userTargets(text);
           const shown = attachments.map(({ path: _p, ...rest }) => rest);
-          post({ from: 'user', text: text || '(attachment)', to, attachments: shown.length ? shown : undefined });
-          for (const id of to) enqueue(id, { fromId: 'user', text: text || 'Please look at the attached file(s).', hop: 0, attachments, urgent });
-          return send(res, 200, { ok: true, to });
+          const sent = post({ from: 'user', text: text || '(attachment)', to, attachments: shown.length ? shown : undefined });
+          for (const id of to) enqueue(id, { fromId: 'user', text: text || 'Please look at the attached file(s).', hop: 0, attachments, urgent, msgId: sent.id });
+          return send(res, 200, { ok: true, to, id: sent.id });
         }
-        // Update to the latest release. This PC only, like restart.
-        if (url.pathname === '/api/update/apply') {
-          if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Updating is only allowed from the PC Crew runs on.' });
+        // Unsend: remove one of the owner's messages. Anything still waiting in an agent's queue is
+        // dropped before they see it; an agent already working on it is told to disregard it.
+        if (url.pathname === '/api/unsend') {
+          const id = String(body.id || '');
+          const at = history.findIndex((m) => m.id === id);
+          if (at < 0 || history[at].from !== 'user') return send(res, 404, { error: 'message not found' });
+          const m = history[at];
+          history.splice(at, 1);
+          unsentIds.add(id);
           try {
-            const r = await updater.apply();
-            send(res, 200, r);
-            if (r.restarting) {
-              console.log('Restarting to finish the update');
-              for (const a of agents) stopAgent(a.id);
-              setTimeout(() => process.exit(0), 1500);
+            const keep = fs.readFileSync(LOG_PATH, 'utf8').split(String.fromCharCode(10)).filter((l) => l && !l.includes(JSON.stringify(id)));
+            fs.writeFileSync(LOG_PATH, keep.length ? keep.join(String.fromCharCode(10)) + String.fromCharCode(10) : '');
+          } catch {}
+          const told = [];
+          for (const aid of m.to || []) {
+            const r = runtime[aid];
+            if (!r) continue;
+            const before = r.queue.length;
+            r.queue = r.queue.filter((q) => q.msgId !== id);
+            if (r.queue.length < before) { if (!r.busy && !r.queue.length) r.status = 'idle'; broadcastAgent(byId[aid]); continue; }
+            if (r.busy) {
+              told.push(aid);
+              enqueue(aid, { fromId: 'user', text: `[${settings.userName} unsent his last message, so disregard it and do not act on it: "${String(m.text).slice(0, 300)}"]`, hop: 0 });
             }
-          } catch (err) {
-            send(res, 200, { ok: false, error: err.message });
           }
-          return;
+          broadcast('unsent', { id });
+          return send(res, 200, { ok: true, told });
         }
         // Used by the tray icon. This PC only: never over the tunnel or from other devices.
-        if (url.pathname === '/api/restart' && !viaCloudflare && isLocal(req)) {
+        if (url.pathname === '/api/restart' && !viaCloudflare && isLocal(req) && !body.whenIdle) {
           send(res, 200, { ok: true });
-          console.log(`Restart requested at ${new Date().toLocaleString()}`);
-          for (const a of agents) stopAgent(a.id);
-          setTimeout(() => process.exit(0), 1500); // run-crew.cmd starts it again
+          doRestart();
           return;
+        }
+        // Restart the moment no agent is mid-turn (any device, including the phone). Nobody gets cut off.
+        if (url.pathname === '/api/restart') {
+          if (!restartWhenIdle) {
+            restartWhenIdle = true;
+            post({ kind: 'system', text: 'Crew will restart by itself as soon as no agent is working.' });
+          }
+          send(res, 200, { ok: true, whenIdle: true, waiting: busyCount() });
+          return;
+        }
+
+        // ---- agents: create / edit / delete profile
+        if (url.pathname.startsWith('/api/previews/')) {
+          const act = url.pathname.slice('/api/previews/'.length);
+          const id = String(body.id || '').toLowerCase();
+          try {
+            if (act === 'add') return send(res, 200, previews.upsert(body));
+            if (act === 'start') return send(res, 200, await previews.start(id));
+            if (act === 'stop') return send(res, 200, await previews.stop(id));
+            if (act === 'restart') return send(res, 200, await previews.restart(id));
+            if (act === 'remove') { await previews.remove(id); return send(res, 200, { ok: true }); }
+          } catch (e) { return send(res, 400, { error: e.message }); }
+          return send(res, 404, { error: 'not found' });
+        }
+        if (url.pathname === '/api/agents/save') {
+          const id = String(body.id || '').trim().toLowerCase();
+          const clean = (v, n) => String(v ?? '').trim().slice(0, n);
+          const existing = byId[id];
+          if (!existing && (!ID_RE.test(id) || id === 'all' || id.length > 30)) return send(res, 400, { error: 'ID: lowercase letters, digits, dashes; start with a letter ("all" is reserved)' });
+          const name = clean(body.name, 40) || id;
+          let cwdRaw = clean(body.cwd, 400);
+          if (!cwdRaw) cwdRaw = existing ? existing.cwdRaw || existing.cwd : `workspace/${id}`;
+          const cwd = path.resolve(ROOT, cwdRaw);
+          const fields = { name, emoji: clean(body.emoji, 8) || '🤖', description: clean(body.description, 600), goal: clean(body.goal, 3000), instructions: clean(body.instructions, 6000), limits: clean(body.limits, 3000) };
+          if (body.model !== undefined) fields.model = MODEL_CHOICES.includes(body.model) ? body.model : undefined;
+          const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+          fs.copyFileSync(CONFIG_PATH, path.join(DATA_DIR, 'crew.config.before-last-profile-edit.json'));
+          let rec = raw.agents.find((x) => String(x.id).toLowerCase() === id);
+          if (!rec) { rec = { id, cwd: cwdRaw }; raw.agents.push(rec); }
+          Object.assign(rec, fields, { cwd: cwdRaw });
+          for (const k of Object.keys(rec)) if (rec[k] === undefined || (['goal', 'limits'].includes(k) && !rec[k])) delete rec[k];
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2));
+          let a = existing;
+          if (!a) {
+            a = { ...rec, id, cwd };
+            agents.push(a); byId[id] = a;
+            runtime[id] = { status: 'idle', activity: '', queue: [], proc: null, busy: false, stopped: false, resetPending: false, draft: '', needsYou: null, lastModel: null };
+          } else Object.assign(a, rec, { id, cwd });
+          delete a.missing;
+          if (!fs.existsSync(cwd)) { if (cwd.startsWith(ROOT)) fs.mkdirSync(cwd, { recursive: true }); else a.missing = true; }
+          if (!fs.existsSync(path.join(cwd, 'CLAUDE.md')) && !a.missing && !existing) {
+            try { fs.writeFileSync(path.join(cwd, 'CLAUDE.md'), `# ${name}
+
+${fields.description}
+`); } catch {}
+          }
+          rewritePrompts();
+          for (const x of agents) broadcastAgent(x);
+          return send(res, 200, { ok: true, id, created: !existing });
+        }
+        if (url.pathname === '/api/agents/delete') {
+          const id = String(body.id || '');
+          if (!byId[id]) return send(res, 404, { error: 'no such agent' });
+          if (id === settings.defaultAgent) return send(res, 400, { error: 'The default agent cannot be deleted' });
+          stopAgent(id);
+          const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+          fs.copyFileSync(CONFIG_PATH, path.join(DATA_DIR, 'crew.config.before-last-profile-edit.json'));
+          raw.agents = raw.agents.filter((x) => String(x.id).toLowerCase() !== id);
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2));
+          agents.splice(agents.findIndex((x) => x.id === id), 1);
+          delete byId[id]; delete runtime[id]; delete promptFiles[id]; delete state.sessions[id]; delete state.models[id];
+          saveState(); rewritePrompts();
+          broadcast('agentgone', { id });
+          return send(res, 200, { ok: true });
         }
 
         // ---- agents: stop, reset, model
         if ((mm = url.pathname.match(/^\/api\/agents\/([a-z0-9-]+)\/(stop|reset|model)$/)) && byId[mm[1]]) {
           const a = byId[mm[1]];
-          if (mm[2] === 'stop') stopAgent(a.id);
+          if (mm[2] === 'stop') stopWithSweep(a.id);
           else if (mm[2] === 'reset') resetAgent(a);
           else {
             const choice = body.model || null;
@@ -1270,6 +1866,22 @@ function makeHandler(entrance) {
           return send(res, 200, { ok: true, pending: runtime[a.id].resetPending });
         }
 
+        // ---- answer or dismiss a question in the "Waiting on you" box
+        if (url.pathname === '/api/ask/answer' || url.pathname === '/api/ask/dismiss') {
+          const k = asks.find((x) => x.id === body.id);
+          if (!k) return send(res, 404, { error: 'That question was already answered.' });
+          asks = asks.filter((x) => x.id !== k.id);
+          saveAsks();
+          if (url.pathname === '/api/ask/dismiss' || !byId[k.agent]) return send(res, 200, { ok: true });
+          const choice = String(body.choice || '').trim().slice(0, 500);
+          if (!choice) return send(res, 400, { error: 'empty' });
+          const text = `@${k.agent} Re "${trunc(k.q, 120)}": ${choice}`;
+          const sent = post({ from: 'user', text, to: [k.agent] });
+          enqueue(k.agent, { fromId: 'user', hop: 0, msgId: sent.id,
+            text: `Answer to your question "${k.q}": ${choice}. Act on it now; do not ask again.` });
+          return send(res, 200, { ok: true });
+        }
+
         // ---- approve a permission an agent was refused, and let it continue
         if (url.pathname === '/api/approve') {
           const m = history.find((x) => x.id === body.id);
@@ -1278,11 +1890,48 @@ function makeHandler(entrance) {
           const a = byId[m.from];
           setFlag(m.id, { approved: Date.now() });
           const labels = m.denials.map((d) => d.label).join(', ');
-          post({ from: 'user', text: `✅ Approved for ${a.name}: ${labels}`, to: [a.id] });
+          if (body.always) {
+            // Remember it for good (this agent only): broaden a script run to "that script, any arguments".
+            state.alwaysAllow = state.alwaysAllow || {};
+            const list = state.alwaysAllow[a.id] = state.alwaysAllow[a.id] || [];
+            for (const d of m.denials) {
+              let rule = d.rule;
+              const bm = /^(Bash|PowerShell)\((.*)\)$/s.exec(rule);
+              if (bm) {
+                const t = bm[2].trim().split(/\s+/);
+                if (/^(python3?|py|node)$/i.test(t[0]) && t[1] && !t[1].startsWith('-')) rule = `${bm[1]}(${t[0]} ${t[1]}:*)`;
+              }
+              if (!list.includes(rule)) list.push(rule);
+            }
+            saveState();
+          }
+          post({ from: 'user', text: `✅ ${body.always ? 'Always allowed' : 'Approved'} for ${a.name}: ${labels}`, to: [a.id] });
           enqueue(a.id, {
             fromId: 'user', hop: 0, allow: m.denials.map((d) => d.rule),
             text: `Approved: you may now ${labels}. Please continue where you left off.`,
           });
+          return send(res, 200, { ok: true });
+        }
+        // ---- Blocked board: wake the teammate a stuck item is waiting on
+        if (url.pathname === '/api/status/nudge') {
+          const t = byId[body.agent];
+          if (!t) return send(res, 404, { error: 'Unknown agent.' });
+          const note = String(body.note || '').slice(0, 600);
+          const text = `${settings.userName} pressed "Wake" on the Blocked board: someone is waiting on you. ${note ? `The STATUS line says: "${note}". ` : ''}Check STATUS.md (tail -30), do the part that is yours, and stop when done.`;
+          if (t.id === 'd2auto' && !(new Date().getHours() >= 23 || new Date().getHours() < 6)) {
+            return send(res, 409, { error: 'D2Auto only runs at night. Its queue is worked at 11 PM.' });
+          }
+          post({ from: 'user', text: `⏰ Woke ${t.name} from the Blocked board.`, to: [t.id] });
+          enqueue(t.id, { fromId: 'user', hop: 0, text });
+          return send(res, 200, { ok: true });
+        }
+        // ---- say no to a refused tool call: just clears it from "Waiting on you"
+        if (url.pathname === '/api/deny') {
+          const m = history.find((x) => x.id === body.id);
+          if (!m?.denials?.length || !byId[m.from]) return send(res, 404, { error: 'Nothing to deny on that message.' });
+          if (!state.flags[m.id]?.approved) setFlag(m.id, { denied: Date.now() });
+          const r = runtime[m.from];
+          if (r.needsYou?.msgId === m.id) { r.needsYou = null; broadcastAgent(byId[m.from]); }
           return send(res, 200, { ok: true });
         }
 
@@ -1301,16 +1950,44 @@ function makeHandler(entrance) {
         }
 
         // ---- usage budget guard
-        if (url.pathname === '/api/stopall') {
-          for (const a of agents) stopAgent(a.id);
-          return send(res, 200, { ok: true });
-        }
         if (url.pathname === '/api/prefs') {
           const k = String(body.key || '');
-          if (!/^crew-[w-]{1,40}$/.test(k) || typeof body.value !== 'string' || body.value.length > 20000) return send(res, 400, { error: 'bad pref' });
+          if (!/^crew-[\w-]{1,40}$/.test(k) || typeof body.value !== 'string' || body.value.length > 20000) return send(res, 400, { error: 'bad pref' });
           let all = {}; try { all = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf8')); } catch {}
           all[k] = body.value;
           fs.writeFileSync(PREFS_PATH, JSON.stringify(all, null, 2));
+          return send(res, 200, { ok: true });
+        }
+        if (url.pathname === '/api/pin') {
+          const id = String(body.id || '');
+          if (!id) return send(res, 400, { error: 'id required' });
+          const at = pins.findIndex((p) => p.id === id);
+          if (at >= 0) pins.splice(at, 1);
+          else {
+            const pm = history.find((m) => m.id === id);
+            if (!pm) return send(res, 404, { error: 'message not found' });
+            pins.unshift({ id, from: pm.from, ts: pm.ts, text: String(pm.text || '').slice(0, 20000), pinnedAt: Date.now() });
+          }
+          try { fs.writeFileSync(PINS_PATH, JSON.stringify(pins)); } catch {}
+          broadcast('pins', pins);
+          return send(res, 200, { ok: true });
+        }
+        if (url.pathname === '/api/react') {
+          const id = String(body.id || ''), emoji = String(body.emoji || '').slice(0, 8);
+          if (!id || !emoji) return send(res, 400, { error: 'id and emoji required' });
+          const cur = new Set(reactions[id] || []);
+          if (cur.has(emoji)) cur.delete(emoji); else cur.add(emoji);
+          if (cur.size) reactions[id] = [...cur]; else delete reactions[id];
+          try { fs.writeFileSync(REACT_PATH, JSON.stringify(reactions)); } catch {}
+          broadcast('reactions', { id, list: reactions[id] || [] });
+          // Agents see it: a reaction the owner ADDS to an agent's message is delivered to that agent.
+          const rm = history.find((m) => m.id === id);
+          if (rm && cur.has(emoji) && rm.from && rm.from !== 'user' && byId[rm.from] && !byId[rm.from].missing) {
+            const meaning = { '👍': 'yes / approved / go ahead', '❤️': 'love it, great work', '😂': 'funny', '🎉': 'celebrate, nicely done', '👀': 'seen, looking at it', '🤔': 'unsure, needs a rethink or explanation', '🔥': 'excellent', '😬': 'concern, that worries me' }[emoji] || '';
+            const quote = String(rm.text || '').replace(/\s+/g, ' ').slice(0, 300);
+            enqueue(rm.from, { fromId: 'user', text: `[the owner reacted ${emoji}${meaning ? ' (' + meaning + ')' : ''} to your message: "${quote}"]
+Treat this as the owner's answer to that message. If it was a question or plan awaiting approval, 👍 means yes: proceed. Reply only if you take action or need to clarify; do not just acknowledge.`, hop: 0 });
+          }
           return send(res, 200, { ok: true });
         }
         if (url.pathname === '/api/notes') {
@@ -1353,13 +2030,7 @@ function makeHandler(entrance) {
         }
 
         // ---- phone notifications
-        if (url.pathname === '/api/machines/pair') {
-          const p = presence.newPairCode();
-          // Address another PC should use to reach this hub: the Cloudflare name if set up, else this PC on the LAN.
-          const hub = cf ? cf.hostname : settings.allowLan && lanAddresses()[0] ? lanAddresses()[0] + ':' + settings.port : '';
-          const line = hub ? 'powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hast3/claudecrew/main/install.ps1))) -Hub ' + hub + ' -Code ' + p.code + '"' : '';
-          return send(res, 200, { ...p, hub, line });
-        }
+        if (url.pathname === '/api/machines/pair') return send(res, 200, presence.newPairCode());
         if (url.pathname === '/api/machines/connect') {
           try {
             const hubUrl = await pairOnce({ hubUrl: body.url, pairCode: body.code, cfClientId: body.cfClientId, cfClientSecret: body.cfClientSecret,
@@ -1392,7 +2063,7 @@ function makeHandler(entrance) {
           return send(res, 200, { ok: true, status: r[0] });
         }
       }
-      send(res, 404, { error: 'not found' });
+      send(res, 404, { error: req.method === 'POST' && wantsJson ? 'Crew needs a restart to use this.' : 'not found' });
     } catch (err) {
       send(res, 500, { error: err.message });
     }
@@ -1413,14 +2084,24 @@ function listen(server, port, host, what) {
 
 (async () => {
   const local = `http://localhost:${settings.port}`;
-  await listen(http.createServer(makeHandler('local')), settings.port, settings.allowLan ? '0.0.0.0' : '127.0.0.1', 'local');
+  const localServer = http.createServer(makeHandler('local'));
+  localServer.on('upgrade', makeUpgradeHandler('local'));
+  await listen(localServer, settings.port, settings.allowLan ? '0.0.0.0' : '127.0.0.1', 'local');
   if (cf) {
     // Loopback only: the tunnel runs on this PC, nothing else should reach this port.
-    await listen(http.createServer(makeHandler('cloudflare')), cf.port, '127.0.0.1', 'Cloudflare');
+    const cfServer = http.createServer(makeHandler('cloudflare'));
+    cfServer.on('upgrade', makeUpgradeHandler('cloudflare'));
+    await listen(cfServer, cf.port, '127.0.0.1', 'Cloudflare');
   }
+  previews.boot().catch((err) => console.log('  !! previews failed to start: ' + err.message));
 
   scheduler.start();
+  try {
+    const st = autos.start();
+    post({ kind: 'system', text: `⚡ Automations live: ${st.rules} rules on${st.resumed ? `, ${st.resumed} waits resumed` : ''}.` });
+  } catch (err) { console.log('  !! automations failed to start: ' + err.message); }
   updater.start();
+  pump(); // anything carried over from a restart
   if (rawCfg.presenceHub?.url) startPresenceClient(rawCfg.presenceHub);
   console.log(`\n  Claude Crew is running: ${local}`);
   console.log(`  Claude Code: ${CLAUDE}`);
@@ -1443,8 +2124,7 @@ function listen(server, port, host, what) {
   console.log(process.stdout.isTTY
     ? '\n  Leave this window open. Close it (or Ctrl+C) to stop Crew.\n'
     : '\n  Running in the background. Use the Crew tray icon to open or restart it.\n');
-  if (process.argv.includes('--open')) {
-    if (process.platform === 'win32') execFile('cmd', ['/c', 'start', '', local], () => {});
-    else execFile(process.platform === 'darwin' ? 'open' : 'xdg-open', [local], () => {});
+  if (process.argv.includes('--open') && process.platform === 'win32') {
+    execFile('cmd', ['/c', 'start', '', local], () => {});
   }
 })();

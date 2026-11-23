@@ -4,12 +4,12 @@
     "allowLan": false,
     "userName": "You",
     "defaultAgent": "assistant",
-    "maxHops": 1,
+    "maxHops": 3,
     "maxConcurrent": 2,
-    "permissionMode": "auto",
+    "groupCaps": {},
+    "permissionMode": "bypassPermissions",
     "model": null,
-    "claudePath": null,
-    "budget": { "enabled": true, "fiveHour": 0.85, "weekly": 0.95 }
+    "claudePath": null
   },
   "cloudflare": {
     "enabled": false,
@@ -17,7 +17,9 @@
     "teamDomain": "myteam.cloudflareaccess.com",
     "aud": "your-access-application-aud-tag",
     "port": 7778,
-    "allowedEmails": ["you@example.com"]
+    "allowedEmails": [
+      "you@example.com"
+    ]
   },
   "agents": [
     {
@@ -41,11 +43,11 @@
     {
       "id": "docs",
       "name": "Docs",
-      "emoji": "📘",
-      "avatar": "blueprint",
+      "emoji": "📚",
+      "avatar": "book",
       "cwd": "workspace/docs",
-      "description": "Writes and edits documentation, notes and plans. Never changes code.",
-      "permissionMode": "acceptEdits"
+      "description": "Writes and tidies documentation.",
+      "instructions": "Keep wording plain. Never invent features; read the code first."
     }
   ]
 }

@@ -1,79 +1,109 @@
 # Claude Crew
 
-A chat room for a team of [Claude Code](https://docs.claude.com/en/docs/claude-code) agents. Each agent works in its own project folder, keeps its own conversation, and can hand work to a teammate. You talk to all of them from one web page, on your PC or your phone.
+A chat room on your PC where several Claude Code agents each work in their own project folder and can hand work to each other. It runs on your Claude subscription through the `claude` command you already use, so there is no API key and no extra bill. Usage counts toward your plan's limits, the same as using Claude Code yourself.
 
-Crew drives the `claude` command you already have, so it runs on your Claude subscription (or whatever account your Claude Code is logged in with). There is no separate API key. Agent work counts toward your plan's usage limits, the same as using Claude Code yourself.
+## Start it
 
-## Features
-- **Machines** (🖥): see which computers run Crew and whether they are online. Setup, including remote use through Cloudflare, is in [docs/MACHINES.md](docs/MACHINES.md).
+Crew starts by itself when Windows boots and runs in the background, with no window, even before you sign in. A **Crew icon in the system tray** appears when you sign in:
 
-- **One chat, many agents.** Type `@id` to talk to one agent, `@a @b` for several, or `@all`. Messages with no mention go to a default agent.
-- **Handoffs.** An agent can pass work to the teammate who owns it with a short brief. The chain is capped by `maxHops`, so agents don't keep waking each other.
-- **Persistent sessions.** Each agent resumes its own Claude Code conversation, even after a restart. ↺ starts it fresh.
-- **Live activity.** Replies stream in as the agent writes them, with each step shown (files read, commands run).
-- **What changed + undo.** Each reply lists the files that turn changed. In git folders you get a per-file diff and one-click **Undo**.
-- **Needs you.** When Claude Code refuses an action, the reply shows exactly what was refused, with **Approve once and continue**.
-- **Usage meter and budget guard.** Shows your plan's 5-hour and weekly usage and holds new work above a level you set.
-- **Scheduled jobs.** For example, "weekdays at 08:00, @webapp run the tests" or "every 4 hours".
-- **Attachments.** Photos, screenshots, PDFs and text files, up to 15 MB each.
-- **Push notifications.** Uses Web Push (VAPID, built in, no third-party service). Works on phones too, over HTTPS.
-- **Installable web app (PWA)**, with voice dictation, a per-agent model choice, and light and dark themes.
-- **Groups and a notes pad**: put agents into collapsible groups, each with a 📝 to-do/done checklist. Reorder, pin, colour and re-icon agents from the crew bar.
-- **No dependencies.** One Node file and one HTML page. Nothing to `npm install`.
+- Green dot: ready. Amber: agents working. Grey: not running.
+- Double-click to open Crew. Right-click for the public address, reply notifications, **View log**, and **Restart Crew**.
+- **Hide tray icon** removes only the icon. Crew keeps running.
 
-## Requirements
+**Start Crew.bat** opens Crew in your browser and brings the tray icon back if you hid it.
 
-- **Node.js 20 or newer.**
-- **Claude Code CLI**, installed and logged in. Run `claude` once in a terminal and finish the login (or run `claude auth login`). A Claude Pro/Max subscription or another account Claude Code accepts.
-- **OS:** Windows 10/11 is the main, tested platform. The server and web page are plain Node and run on macOS and Linux. The tray icon, autostart and launcher scripts are Windows-only (see [docs/SETUP.md](docs/SETUP-ADVANCED.md#windows-only-pieces)).
-- **git** (optional), for change tracking and undo in project folders.
+Background output goes to `data\crew.log`. To set up or remove the startup task (asks for admin once):
 
-## Quick start
-
-**Windows (easiest).** Click the green **Code** button on this page, choose **Download ZIP**, right-click the zip and **Extract All**, then double-click **INSTALL.bat**. It asks a few plain questions (your name, phone access, which folders you want helpers for), installs what is missing, writes your settings and opens Crew. No administrator rights needed. Full step-by-step with fixes for work laptops: [docs/SETUP.md](docs/SETUP.md).
-
-Prefer one line? Paste this into PowerShell (it installs to your user folder, in `ClaudeCrew`):
-
-```powershell
-irm https://raw.githubusercontent.com/hast3/claudecrew/main/install.ps1 | iex
+```
+powershell -ExecutionPolicy Bypass -File install-autostart.ps1
+powershell -ExecutionPolicy Bypass -File install-autostart.ps1 -Uninstall
 ```
 
-Run it again any time to update.
+If agents reply with a login error, open a terminal and run `claude auth login` once.
 
-**Another PC for the same crew?** On the hub open **🖥 Machines → Get pairing code**. It shows a one-line command with the code filled in. Paste it into PowerShell on the new PC.
+## Talking to agents
 
-**Mac, Linux or by hand:** `git clone https://github.com/hast3/claudecrew`, copy `crew.config.example.json` to `crew.config.json`, then `npm start`. New to Claude Code or the terminal? [docs/SETUP-ADVANCED.md](docs/SETUP-ADVANCED.md) walks through everything.
+| You type | Who gets it |
+| --- | --- |
+| `what should I work on today?` | The default agent (`defaultAgent` in the config) |
+| `@tower why do waves stop spawning?` | Tower |
+| `@tower @d2mod ...` | Both |
+| `@all status check` | Everyone |
 
-## How it works
+Tap an agent's card to add its `@handle` to your message. ■ stops an agent, and ↺ starts it on a fresh conversation (it forgets what you've talked about so far). Otherwise each agent remembers its own conversation, even after a restart.
 
-`server.js` is a small Node HTTP server with no dependencies. For each agent turn it spawns the `claude` CLI in that agent's `cwd`, adds a generated system prompt (who the agent is, its teammates, how handoffs work), resumes the agent's saved session and streams the JSON output back. The browser gets live updates over Server-Sent Events. The page is one file (`public/index.html`) with a service worker for push. State lives in `data/` (chat log, session IDs, usage, schedules, uploads, push keys). Small modules in `lib/` handle usage tracking (`usage.js`), git snapshots and undo (`changes.js`), scheduling (`scheduler.js`), Web Push (`webpush.js`) and icons (`icons.js`).
+**Handoffs:** you just say what you want. The assistant passes project work to the one agent who owns it, and that agent's reply shows up in the chat. A chain stops after `maxHops` handoffs, so agents don't keep waking each other.
 
-## Updating
+**Activity** shows each step an agent is taking (files read, commands run). **🔔** pops a notification when an agent replies while the tab is in the background.
 
-When a newer release is published, a **⬆ Update available (vX)** button appears in the page header (on the PC Crew runs on). Click it and confirm. A git clone is fast-forwarded to the release; a zip install gets the new files copied over it. Your `crew.config.json`, `data/` and `workspace/` are never touched. Crew then restarts itself if it was started by the tray icon or `run-crew.cmd`; otherwise it tells you to restart it. Prefer the terminal? In a clone, `git pull --ff-only`. See [CHANGELOG.md](CHANGELOG.md) for what changed.
+## Features
 
-## Configuration
+- **Usage meter** (header): your plan's 5-hour and weekly usage, read from Claude Code on every agent reply. Tap it for reset times, a per-agent breakdown (runs and tokens), and the budget guard. The bars cover your whole account, including your own Claude Code use.
+- **Budget guard**: when a window passes the level you set (default 5-hour 85%, weekly 95%), new work is held and runs automatically once that window resets. **Run anyway** overrides it until the reset. Change the levels in the usage panel, or under `settings.budget` (`enabled`, `fiveHour`, `weekly` as 0–1).
+- **Needs you**: an agent's card gets a red **!** when it's waiting on you. If Claude Code refused it permission for something, the reply shows exactly what, with **Approve once and continue**. That allows only those exact actions, for that agent's next run.
+- **What changed + undo**: replies list the files the turn changed. In git folders each file has a **diff**, and **Undo** restores the files to how they were before the turn. Undo skips any file that changed again afterwards.
+- **Phone notifications** (🔔): real push notifications, even with Crew closed. On iPhone, add Crew to the home screen first (**Share → Add to Home Screen**), open it from there, then tap 🔔.
+- **Scheduled jobs** (⏰): "weekdays at 08:00, @tower run the tests" or "every 4 hours". Missed jobs run if Crew comes back within 6 hours. Jobs respect the budget guard.
+- **Attachments** (📎 or paste): photos, screenshots, PDFs and text files, up to 15 MB each. The agent gets read access to them.
+- **Live typing**: replies appear as the agent writes them.
+- **Model per agent** (⋯ on a card): Default, Opus, Sonnet or Haiku. Default is Sonnet. The assistant raises a single job to Opus when the work is hard, or drops a lookup to Haiku. Pinning a model on the card overrides that.
+- **Machines** (🖥): see which computers run Crew and whether they're online. Setup, including remote use through Cloudflare, is in [docs/MACHINES.md](docs/MACHINES.md).
+- **Voice** (🎤): dictate in browsers that support it.
 
-All settings live in `crew.config.json`, which is git-ignored (start from `crew.config.example.json`). Environment variables override the file:
+## crew.config.json
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `CREW_CONFIG` | Path to the config file | `crew.config.json` |
-| `CREW_DATA_DIR` | Where chat history, sessions and keys are stored | `data` |
-| `CREW_PORT` | Web port | `settings.port`, else `7777` |
-| `CREW_USER_NAME` | The name agents call you | `settings.userName`, else `You` |
-| `CLAUDE_PATH` | Full path to the `claude` executable | found on `PATH` |
-| `NODE_EXE` | Node used by `run-crew.cmd` (Windows) | found on `PATH` |
+`settings`:
 
-Relative paths are resolved from the Crew folder.
-Name this computer with the optional `machineName` setting, and connect it to a hub from the Machines panel (no config editing). See [docs/MACHINES.md](docs/MACHINES.md).
+- `port`: the web address port (default 7777).
+- `allowLan`: set to `true` to use Crew from your phone on the same Wi-Fi. The startup window then shows the address and an access key to enter on the phone. Windows will ask to allow Node through the firewall; allow it on **Private** networks only.
+- `userName`: what agents call you.
+- `defaultAgent`: who gets messages with no `@mention`.
+- `maxHops`: the most agent-to-agent handoffs allowed in a row. `1` lets the assistant hand work off once; the worker's reply stays in the chat.
+- `maxConcurrent`: how many agents can work at the same time. Keep this low to go easier on your plan's limits.
+- `permissionMode`: what agents may do without asking, since nobody is at the terminal to approve:
+  - `bypassPermissions` (default): agents can do anything except what the Crew guard (`lib/guard.js`, a PreToolUse hook on every run) refuses: recursive deletes on drive roots or outside the project folders, force-push or `reset --hard` on main/master, format/diskpart, deleting or overwriting D2 saves or files in your user folder outside the project folders, govc/ESXi power and destroy commands, and registry deletes. Each refusal lands on the "Permission needed" card with a plain reason; Approve lets it through.
+  - `auto`: agents can edit and run things, and Claude Code's safety checks block anything they're unsure about.
+  - `acceptEdits`: agents can edit files, but commands not on `allowedTools` are refused.
+  - `manual`: agents can read and answer, but anything needing approval is refused.
+- `machineName`, `presenceHub`: name this computer and optionally pair it to a hub. See [docs/MACHINES.md](docs/MACHINES.md).
+- `model`: `null` lets Crew use Sonnet, which the assistant can override per job. Set `"opus"`, `"sonnet"`, or `"haiku"` to force one model for every agent.
 
-## Privacy
+`agents`: each one has an `id` (its @handle), `name`, `emoji`, `cwd` (its project folder), `description` (shown to teammates), and `instructions` (extra guidance for that agent only). Each can also override `permissionMode`, `model`, `allowedTools`, and `disallowedTools`.
 
-Everything runs on your machine. `data/` holds your chat history, the LAN access key and your push keys, and `crew.config.json` holds your agents and paths. Both are git-ignored. Keep them that way, and never put tokens or passwords in the config. Agents read secrets from environment variables instead.
+Restart Crew after editing the config.
 
-## License
+## Internet access (Cloudflare)
 
-MIT. See [LICENSE](LICENSE).
+`cloudflare` in the config opens a second entrance on `port` (default 7778), reachable only from this PC, for a Cloudflare Tunnel to connect to. Cloudflare Access shows the login page and MFA prompt. Crew then checks Cloudflare's signed login token on every request itself, including the signature, the `aud` tag, the team, the expiry, and that the email is in `allowedEmails`, so a mistake in the Cloudflare settings alone can't let anyone in.
 
-Made by [Hast3](https://github.com/hast3). Source: <https://github.com/hast3/claudecrew>.
+- `hostname`: the public address, e.g. `crew.example.com`.
+- `teamDomain`: your Zero Trust team domain, e.g. `myteam.cloudflareaccess.com`.
+- `aud`: the Access application's "Application Audience (AUD) Tag".
+- `allowedEmails`: who may use Crew. Keep this in step with the Access policy.
+
+Point the tunnel's route at `http://localhost:7778`, never at 7777. 7777 is the local entrance, which trusts anything coming from this PC, and the tunnel connects from this PC.
+
+## Changing Crew safely
+
+Crew's own code is in git. After any change:
+
+```
+npm run check
+git add -A
+git commit -m "what changed"
+```
+
+- `npm run check` compiles the server, `lib/`, and every script in the web page without running them, and validates the JSON files. A single bad quote in `index.html` blanks the whole web UI, so the page is checked too.
+- **Commits run the check first**, through a git pre-commit hook, and are refused if it fails.
+- **To undo a bad edit:** `git restore <file>` (uncommitted), or `git log` then `git revert <commit>`.
+- **Safety net:** if `index.html` ever has a code error anyway, Crew serves the last working version (`data/index.last-good.html`) with a red banner naming the file, line and error. The banner goes away on the next refresh after the fix.
+- Agents follow the same steps (rule 10 in `crew-rules.md`).
+
+## Files
+
+- `server.js`: the app (Node, no dependencies).
+- `public/index.html`: the chat page.
+- `docs/`: extra guides (`MACHINES.md`).
+- `lib/`: machines and presence (`presence.js`), usage tracking (`usage.js`), git snapshots/undo (`changes.js`), scheduled jobs (`scheduler.js`), Web Push (`webpush.js`), and the icon generator (`icons.js`).
+- `data/`: chat log, each agent's conversation ID, the access key, generated agent prompts, `usage.json`, `schedules.json`, uploads, and push keys (`vapid.json`, `push-subscriptions.json`; keep these private). Delete `data/messages.jsonl` to clear the chat history.
+- `workspace/`: folders for agents that don't belong to a project.

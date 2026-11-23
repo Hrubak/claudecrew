@@ -268,7 +268,7 @@ try {
             $o = $tpl | ConvertFrom-Json
             $o.id = $a.id; $o.name = $a.name; $o.cwd = $a.cwd
             $o.description = "Works on the $($a.name) folder: answers questions, makes changes and reports back."
-            $o.instructions = 'Tell Dave plainly what you changed. Ask before deleting anything.'.Replace('Dave', $answers.name)
+            $o.instructions = 'Tell the owner plainly what you changed. Ask before deleting anything.'.Replace('the owner', $answers.name)
             $list += $o
         }
         $cfg.agents = $list
