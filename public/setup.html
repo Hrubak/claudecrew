@@ -97,6 +97,7 @@
       <h2>Prerequisites</h2>
       <p class="lead">Crew needs Node.js 20+, git, and the Claude CLI signed in with a paid Claude plan.</p>
       <div class="scard" id="prereqList"></div>
+      <div id="prereqPath" hidden></div>
       <div id="prereqConsent" hidden class="warnbox" style="margin-top:12px"></div>
       <div class="log" id="prereqLog" hidden></div>
     </section>
@@ -340,6 +341,29 @@ function askConsent(kind, spec) {
     $('consentCancel').onclick = () => { box.hidden = true; resolve(false); };
   });
 }
+function drawPathFix(p) {
+  const el = $('prereqPath');
+  if (!el) return;
+  const fix = (p && p.pathFix) || {};
+  if (fix.fixed) {
+    el.hidden = false;
+    el.className = 'okbox';
+    el.innerHTML = esc(fix.message || ('Added ' + (fix.dir || '%USERPROFILE%\\.local\\bin') + ' to your PATH. Open new terminals to pick it up.'));
+    return;
+  }
+  if (fix.failed || (fix.needed && !fix.fixed && fix.exeExists)) {
+    el.hidden = false;
+    el.className = 'warnbox';
+    const steps = fix.manualSteps ? '<pre class="mono" style="margin:8px 0 10px;white-space:pre-wrap">'+esc(fix.manualSteps)+'</pre>' : '';
+    el.innerHTML = '<b>'+esc(fix.message || 'Could not add the Claude CLI folder to your PATH.')+'</b>'
+      + '<p style="margin:6px 0 0">The official installer placed Claude at <span class="mono">'+esc(fix.exe || '%USERPROFILE%\\.local\\bin\\claude.exe')+'</span>, but that folder is not on your User PATH.</p>'
+      + steps
+      + '<button type="button" class="btn primary" data-prereq="fix-path">Fix PATH</button>';
+    return;
+  }
+  el.hidden = true;
+  el.innerHTML = '';
+}
 async function drawPrereqs(fetchNow = true) {
   const box = $('prereqList');
   if (fetchNow) {
@@ -370,7 +394,8 @@ async function drawPrereqs(fetchNow = true) {
     if (logged && p.claude?.ok && !row.s?.ok) extra += prereqBtn('login', 'Sign in');
     return '<div class="check"><div class="dot '+st+'">'+icon+'</div><div class="l"><b>'+row.name+'</b><p>'+extra+'</p></div></div>';
   }).join('');
-  box.querySelectorAll('[data-prereq]').forEach((btn) => {
+  drawPathFix(p);
+  const bindBtns = (root) => { if (root) root.querySelectorAll('[data-prereq]').forEach((btn) => {
     btn.onclick = async () => {
       const kind = btn.getAttribute('data-prereq');
       if (kind === 'login') {
@@ -390,12 +415,22 @@ async function drawPrereqs(fetchNow = true) {
         }, 4000);
         return;
       }
+      if (kind === 'fix-path') {
+        btn.disabled = true;
+        const res = await api('/api/prereqs/fix-path', {});
+        if (res.prereqs) state.prereqs = res.prereqs;
+        else if (res.pathFix) state.prereqs = Object.assign({}, state.prereqs || {}, { pathFix: res.pathFix });
+        await drawPrereqs(false);
+        return;
+      }
       const spec = cmds[kind] || {};
       if (!(await askConsent(kind, spec))) return;
       btn.disabled = true;
       await streamPrereqInstall(kind);
     };
-  });
+  }); };
+  bindBtns(box);
+  bindBtns($('prereqPath'));
   setFoot();
 }
 

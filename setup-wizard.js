@@ -170,6 +170,11 @@ async function handle(req, res) {
       const launched = setup.launchClaudeLogin();
       return send(res, launched.ok ? 200 : 501, launched);
     }
+    if (url.pathname === '/api/prereqs/fix-path') {
+      const pathFix = await setup.ensureLocalClaudePath();
+      const prereqs = await setup.checkPrereqs();
+      return send(res, pathFix.failed ? 500 : 200, { ok: !pathFix.failed, pathFix, prereqs });
+    }
     if (url.pathname === '/api/uninstall/preview') {
       try {
         const scanResult = body.scan || await scan.scanCrew({ currentDir: body.dir || START_DIR, extraDirs: [START_DIR], scriptPath: path.join(ROOT, 'scan-inventory.ps1') });

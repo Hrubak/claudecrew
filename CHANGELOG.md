@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Add AGENTS.md (and a short CLAUDE.md that points to it) so coding agents know how to work in this repo.
+- After installing the official Claude CLI, and on every prerequisite check, the wizard adds `%USERPROFILE%\.local\bin` to the User PATH (never the Machine PATH, never with setx) if `claude.exe` is there but the folder is missing. The current process PATH is updated so Sign in and `claude --version` work before a new terminal is opened. A status line reports the change; if the write fails, manual steps and a Fix PATH button are shown.
+
 - Setup and uninstall pass the install folder as `"%~dp0."` so a trailing backslash cannot break `--dir`. Node also strips stray quotes and trailing separators.
 - Uninstall stops detected Crew processes in tree order (tray, then run-crew shells, then the node server and descendants), never by image name, and never stops the uninstall wizard itself. After removal it re-scans and can retry any that are still running.
 - New backups write a `manifest.json` (version, date, source folders, file counts) and log how many files were written, skipped, or missing, including data/, summaries and workspaces. Setup and Settings can restore a backup, with zip-slip checks, secret skipping, and Merge / Replace / Cancel when files already exist.
