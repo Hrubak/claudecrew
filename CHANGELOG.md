@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Setup and uninstall pass the install folder as `"%~dp0."` so a trailing backslash cannot break `--dir`. Node also strips stray quotes and trailing separators.
+- Uninstall stops detected Crew processes in tree order (tray, then run-crew shells, then the node server and descendants), never by image name, and never stops the uninstall wizard itself. After removal it re-scans and can retry any that are still running.
+- New backups write a `manifest.json` (version, date, source folders, file counts) and log how many files were written, skipped, or missing, including data/, summaries and workspaces. Setup and Settings can restore a backup, with zip-slip checks, secret skipping, and Merge / Replace / Cancel when files already exist.
+
 - Prerequisites can install the official Claude CLI (`irm https://claude.ai/install.ps1 | iex`, from https://code.claude.com/docs/en/quickstart), Git, and Node.js LTS with live output and a re-check. Sign-in opens a visible terminal. Continue without signing in remains available.
 - Uninstall now scans for every Crew install and leftover (processes, tray, shortcuts, scheduled tasks, Run keys, and known folders), with a checkbox list, a read-only `uninstall.cmd --scan --json` / `node scripts/crew-scan.js --json` mode, and a self-delete handoff when removing the running copy.
 

@@ -19,6 +19,7 @@ const { createIntegrations } = require('./lib/integrations');
 const { createPresence, startClient, pairOnce } = require('./lib/presence');
 const setup = require('./lib/setup');
 const uninstall = require('./lib/uninstall');
+const backup = require('./lib/backup');
 const scan = require('./lib/scan');
 
 const ROOT = __dirname;
@@ -1387,6 +1388,10 @@ function makeHandler(entrance) {
         if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Source can only be viewed from the PC Crew runs on.' });
         return send(res, 200, await setup.sourceStatus(ROOT));
       }
+      if (req.method === 'GET' && url.pathname === '/api/backups') {
+        if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Backups can only be listed from the PC Crew runs on.' });
+        return send(res, 200, { ok: true, backups: backup.findBackupZips() });
+      }
       if (req.method === 'GET' && url.pathname === '/api/uninstall/scan') {
         if (viaCloudflare || !isLocal(req)) return send(res, 403, { error: 'Uninstall can only be started from the PC Crew runs on.' });
         try {
@@ -1520,6 +1525,43 @@ function makeHandler(entrance) {
             return send(res, 409, { ok: false, error: err.message, dirtyFiles: err.dirtyFiles || [] });
           }
           return;
+        }
+        if (url.pathname === '/api/backups/inspect' && !viaCloudflare && isLocal(req)) {
+          try { return send(res, 200, backup.inspectBackup(body.path)); }
+          catch (err) { return send(res, 400, { ok: false, error: err.message, unsafe: err.unsafe }); }
+        }
+        if (url.pathname === '/api/backups/preview' && !viaCloudflare && isLocal(req)) {
+          try { return send(res, 200, backup.previewRestore(body.path, body.dir || ROOT, { selected: body.selected })); }
+          catch (err) { return send(res, 400, { ok: false, error: err.message }); }
+        }
+        if (url.pathname === '/api/backups/restore' && !viaCloudflare && isLocal(req)) {
+          try {
+            const result = await backup.restoreBackup({
+              file: body.path, destDir: body.dir || ROOT, mode: body.mode, selected: body.selected, confirmReplace: !!body.confirmReplace,
+            });
+            if (result.ok && body.restart !== false) {
+              send(res, 200, { ...result, restarting: true });
+              for (const a of agents) stopAgent(a.id);
+              setTimeout(() => process.exit(0), 1500);
+              return;
+            }
+            return send(res, result.ok || result.needsConfirm || result.cancelled ? 200 : 400, result);
+          } catch (err) { return send(res, 400, { ok: false, error: err.message }); }
+        }
+        if (url.pathname === '/api/browse-backup' && !viaCloudflare && isLocal(req)) {
+          const result = await setup.browseBackup({ scriptPath: path.join(ROOT, 'browse-backup.ps1') });
+          return send(res, result.ok ? 200 : (result.error === 'not available' ? 501 : 200), result);
+        }
+        if (url.pathname === '/api/uninstall/retry-stop' && !viaCloudflare && isLocal(req)) {
+          try {
+            const actions = await uninstall.stopSelectedProcesses(body.processes || [], { selfPid: process.pid, selfPpid: process.ppid });
+            let stillRunning = [];
+            try {
+              const next = await scan.scanCrew({ currentDir: ROOT, extraDirs: [ROOT], scriptPath: path.join(ROOT, 'scan-inventory.ps1') });
+              stillRunning = uninstall.stillRunningFromScan(next, { excludedPids: uninstall.excludedUninstallPids((next.groups && next.groups.processes) || [], { selfPid: process.pid, selfPpid: process.ppid }) });
+            } catch { /* best-effort */ }
+            return send(res, 200, { ok: true, actions, stillRunning });
+          } catch (err) { return send(res, 400, { ok: false, error: err.message }); }
         }
         if (url.pathname === '/api/uninstall' && !viaCloudflare && isLocal(req)) {
           try {

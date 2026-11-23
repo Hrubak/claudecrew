@@ -26,7 +26,7 @@ if not defined NODE_EXE (
   pause
   exit /b 1
 )
-"%NODE_EXE%" "%~dp0setup-wizard.js" --dir "%~dp0" %*
+"%NODE_EXE%" "%~dp0setup-wizard.js" --dir "%~dp0." %*
 echo.
 echo ^(You can close this window now.^)
 pause >nul

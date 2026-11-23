@@ -120,6 +120,20 @@
       </div></div>
       <div id="folderMsg"></div>
     </section>
+    <section class="page" data-id="restore" hidden>
+      <h2>Restore data from backup</h2>
+      <p class="lead">If you have a previous Crew backup, you can bring back <span class="mono">data/</span>, <span class="mono">crew.config.json</span>, summaries and agent workspaces. Secrets such as <span class="mono">.env</span> are never restored. You can skip this.</p>
+      <div id="restoreDetected"></div>
+      <div class="scard" style="margin-top:12px">
+        <div class="srow stack">
+          <div class="l"><b>Backup zip</b><p>Newest <span class="mono">ClaudeCrew-backup-*.zip</span> in your user profile is listed first. Or browse for another.</p></div>
+          <div class="pathctl"><input class="stx" id="restorePath" type="text" spellcheck="false" placeholder="C:\Users\…\ClaudeCrew-backup-….zip"><button type="button" class="btn" id="restoreBrowse">Browse…</button></div>
+        </div>
+      </div>
+      <div id="restoreList" style="margin-top:12px"></div>
+      <div id="restoreConflict" hidden style="margin-top:12px"></div>
+      <div id="restoreMsg"></div>
+    </section>
     <section class="page" data-id="options" hidden>
       <h2>Key options</h2>
       <p class="lead">These become your first <span class="mono">crew.config.json</span>. Default effort is <b>low</b>. Autostart is off unless you turn it on.</p>
@@ -187,6 +201,7 @@
         <h2>Crew has been uninstalled.</h2>
         <p class="lead" id="undoneLead"></p>
       </div>
+      <div id="stillRunning" hidden></div>
     </section>
     <div class="foot">
       <button type="button" class="btn" id="backBtn">Back</button>
@@ -198,9 +213,9 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { defs: null, prereqs: null, skipLogin: false, folder: null, sourceKind: 'hast3', port: 7777, preview: null, scan: null, pollLogin: null };
+const state = { defs: null, prereqs: null, skipLogin: false, folder: null, sourceKind: 'hast3', port: 7777, preview: null, scan: null, pollLogin: null, restore: { skip: true } };
 const FLOWS = {
-  install: ['prereqs','source','folder','options','install','done'],
+  install: ['prereqs','source','folder','restore','options','install','done'],
   repair: ['prereqs','options','install','done'],
   switch: ['switch'],
   uninstall: ['uscan','udata','confirm','unprogress','undone'],
@@ -209,7 +224,7 @@ const FLOWS = {
 let flow = 'install', step = 0;
 
 function titles() {
-  return { prereqs:'Prerequisites', source:'Source', folder:'Folder', options:'Options', install:'Install', done:'Done', mode:'This copy', switch:'Switch source', uscan:'Scan', udata:'Your data', confirm:'Confirm', unprogress:'Uninstall', undone:'Done' };
+  return { prereqs:'Prerequisites', source:'Source', folder:'Folder', restore:'Restore', options:'Options', install:'Install', done:'Done', mode:'This copy', switch:'Switch source', uscan:'Scan', udata:'Your data', confirm:'Confirm', unprogress:'Uninstall', undone:'Done' };
 }
 
 async function api(path, body) {
@@ -241,6 +256,7 @@ function show() {
   if (id === 'prereqs') drawPrereqs();
   if (id === 'source') drawSource();
   if (id === 'folder') checkFolder();
+  if (id === 'restore') loadRestore();
   if (id === 'options') drawPerm();
   if (id === 'uscan') loadScan();
   if (id === 'udata') loadPreview();
@@ -260,6 +276,7 @@ function setFoot() {
     next.disabled = false;
     if (ready && !loginOk) { $('secondaryBtn').hidden = false; $('secondaryBtn').textContent = 'Continue without signing in'; }
   } else if (id === 'mode') { next.textContent = 'Continue'; next.disabled = false; }
+  else if (id === 'restore') { next.textContent = (state.restore && !state.restore.skip && state.restore.path) ? 'Use this backup' : 'Skip restore'; next.disabled = false; }
   else if (id === 'options') { next.textContent = flow === 'repair' ? 'Repair' : 'Install'; next.disabled = !$('optName').value.trim(); }
   else if (id === 'confirm') { next.textContent = 'Uninstall'; next.className = 'btn danger'; next.disabled = $('confirmText').value.trim() !== 'UNINSTALL'; }
   else { next.className = 'btn primary'; next.textContent = 'Next'; next.disabled = !canNext(); }
@@ -270,6 +287,7 @@ function canNext() {
   const id = FLOWS[flow][step];
   if (id === 'source') return !!source().url && !!source().branch;
   if (id === 'folder') return !!(state.folder && state.folder.ok);
+  if (id === 'restore') return true;
   if (id === 'options') return !!$('optName').value.trim() && +$('optPort').value >= 1024;
   if (id === 'switch') return !(state.switchInfo && state.switchInfo.dirty);
   return true;
@@ -453,6 +471,7 @@ async function runInstall() {
       model: $('optModel').value || null, effort: $('optEffort').value, permissionMode: $('optPerm').value,
       machineName: state.defs.machineName,
     },
+    restore: state.restore && !state.restore.skip && state.restore.path ? state.restore : { skip: true },
   };
   const res = await fetch('/api/install', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
   const reader = res.body.getReader();
@@ -505,6 +524,106 @@ async function doSwitch() {
   else { $('switchWarn').className = 'errbox'; $('switchWarn').textContent = j.error || 'Switch failed'; }
 }
 
+
+function kindLabel(k) {
+  return k === 'data/' ? 'data/' : k;
+}
+function countsLine(c) {
+  if (!c) return '';
+  const parts = [];
+  if (c.files != null) parts.push(c.files + ' files');
+  if (c.restored != null) parts.push(c.restored + ' restored');
+  if (c.bytes != null) parts.push(c.bytes + ' bytes');
+  if (c.kinds) {
+    if (c.kinds['data/']) parts.push('data/ ' + c.kinds['data/']);
+    if (c.kinds.summaries) parts.push('summaries ' + c.kinds.summaries);
+    if (c.kinds.workspace) parts.push('workspaces ' + c.kinds.workspace);
+    if (c.kinds['crew.config.json']) parts.push('config');
+  }
+  if (c.skipped) parts.push('skipped ' + c.skipped);
+  if (c.missing) parts.push('missing ' + c.missing);
+  if (c.secrets) parts.push('secrets skipped ' + c.secrets);
+  return parts.join(', ');
+}
+function selectedRestoreNames() {
+  return [...document.querySelectorAll('#restoreList input[type=checkbox][data-name]:checked')].map((el) => el.getAttribute('data-name'));
+}
+async function loadRestore() {
+  const box = $('restoreDetected');
+  const list = $('restoreList');
+  const conflict = $('restoreConflict');
+  const msg = $('restoreMsg');
+  conflict.hidden = true; list.innerHTML = ''; msg.textContent = '';
+  const j = await fetch('/api/backups').then((r) => r.json()).catch((e) => ({ error: e.message, backups: [] }));
+  state.backups = j.backups || [];
+  if (j.error) { box.innerHTML = '<div class="errbox">'+esc(j.error)+'</div>'; return; }
+  if (!state.backups.length && !$('restorePath').value) {
+    box.innerHTML = '<div class="warnbox">No <span class="mono">ClaudeCrew-backup-*.zip</span> was found in your user profile. Browse for one, or skip.</div>';
+    state.restore = { skip: true };
+    setFoot(); return;
+  }
+  box.innerHTML = '<div class="scard">'+state.backups.map((b, i) => '<label class="srow" style="cursor:pointer"><input type="radio" name="restorePick" value="'+esc(b.path)+'" '+(i===0?'checked':'')+'> <div class="l"><b>'+esc(b.name)+'</b><p>'+esc(b.path)+' · '+(b.size||0)+' bytes</p></div></label>').join('')+'</div>';
+  if (state.backups[0] && !$('restorePath').value) $('restorePath').value = state.backups[0].path;
+  document.querySelectorAll('input[name="restorePick"]').forEach((el) => el.addEventListener('change', () => { $('restorePath').value = el.value; inspectRestore(); }));
+  await inspectRestore();
+}
+async function inspectRestore() {
+  const path = $('restorePath').value.trim();
+  const list = $('restoreList');
+  const conflict = $('restoreConflict');
+  const msg = $('restoreMsg');
+  conflict.hidden = true;
+  if (!path) { state.restore = { skip: true }; setFoot(); return; }
+  const info = await api('/api/backups/inspect', { path });
+  if (info.error) { list.innerHTML = '<div class="errbox">'+esc(info.error)+'</div>'; state.restore = { skip: true }; setFoot(); return; }
+  const kinds = info.counts && info.counts.kinds || {};
+  const warn = (info.warnings||[]).map((w) => '<li>'+esc(w)+'</li>').join('');
+  const secrets = (info.secrets||[]).map((n) => '<li>'+esc(n)+' (will be skipped)</li>').join('');
+  list.innerHTML = '<div class="okbox">Backup looks valid'+(info.manifest ? ' (manifest v'+(info.manifest.version||1)+', '+(info.manifest.fileCount||info.counts.files)+' files).' : ' (older backup, layout inferred as '+(info.layout && info.layout.kind)+').')+' '+esc(countsLine(info.counts))+'.</div>'
+    + (warn ? '<div class="warnbox"><b>Warnings</b><ul class="filelist">'+warn+'</ul></div>' : '')
+    + (secrets ? '<div class="warnbox"><b>Secrets that will not be restored</b><ul class="filelist">'+secrets+'</ul></div>' : '')
+    + '<div class="ssh"><h4>What is in the backup</h4></div><div class="scard">'+info.items.filter((i)=>!i.secret).map((it) => '<label class="srow" style="cursor:pointer"><input type="checkbox" data-name="'+esc(it.name)+'" checked> <div class="l"><b>'+esc(it.kind)+'</b><p>'+esc(it.name)+' · '+(it.size||0)+' bytes</p></div></label>').join('')+'</div>';
+  const dest = $('folderPath') ? $('folderPath').value : (state.defs && state.defs.installDir);
+  const prev = await api('/api/backups/preview', { path, dir: dest, selected: selectedRestoreNames() });
+  let mode = 'replace';
+  if (prev.conflicts && prev.conflicts.length) {
+    conflict.hidden = false;
+    conflict.innerHTML = '<div class="errbox"><b>These files already exist in the install folder</b><ul class="filelist">'+prev.conflicts.map((c)=>'<li>'+esc(c.rel)+'</li>').join('')+'</ul>'
+      + '<p>Merge keeps the files already on disk. Replace overwrites them (current files are backed up first). Cancel leaves restore off.</p>'
+      + '<div class="srow"><label class="radio"><input type="radio" name="restoreMode" value="merge"> <div><b>Merge</b><p>Keep existing files.</p></div></label></div>'
+      + '<div class="srow"><label class="radio"><input type="radio" name="restoreMode" value="replace"> <div><b>Replace</b><p>Overwrite after you confirm below.</p></div></label></div>'
+      + '<label class="srow" style="cursor:pointer"><input type="checkbox" id="restoreConfirmReplace"> <div class="l"><b>I understand Replace will overwrite the files listed above.</b></div></label></div>';
+    mode = 'merge';
+    conflict.querySelectorAll('input[name="restoreMode"]').forEach((el) => el.addEventListener('change', () => { mode = el.value; stashRestore(mode); }));
+    const cb = $('restoreConfirmReplace'); if (cb) cb.addEventListener('change', () => stashRestore(mode));
+  }
+  stashRestore(mode);
+  function stashRestore(m) {
+    const confirmReplace = !!($('restoreConfirmReplace') && $('restoreConfirmReplace').checked);
+    state.restore = { skip: false, path, selected: selectedRestoreNames(), mode: m, confirmReplace };
+    setFoot();
+  }
+  list.querySelectorAll('input[type=checkbox][data-name]').forEach((el) => el.addEventListener('change', () => stashRestore(state.restore && state.restore.mode || 'replace')));
+  setFoot();
+}
+function renderStillRunning(items, counts) {
+  const box = $('stillRunning');
+  if (!box) return;
+  if (!items || !items.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  box.innerHTML = '<div class="errbox"><b>Still running</b><p>These Crew processes were still found after uninstall. The uninstall wizard itself is not listed.</p><ul class="filelist">'+items.map((p)=>'<li>PID '+esc(p.pid)+' '+esc(p.name||'')+' — '+esc(p.reason||p.commandLine||'')+'</li>').join('')+'</ul><p><button type="button" class="btn danger" id="retryStop">Retry stop</button></p></div>';
+  const btn = $('retryStop');
+  if (btn) btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = 'Stopping…';
+    const r = await api('/api/uninstall/retry-stop', { processes: items });
+    renderStillRunning(r.stillRunning || [], counts);
+    if (!(r.stillRunning && r.stillRunning.length)) {
+      box.hidden = false;
+      box.innerHTML = '<div class="okbox">No Crew processes are still running.</div>';
+    }
+  };
+}
+
 function selectedScanIds() {
   return [...document.querySelectorAll('#scanList input[type=checkbox][data-id]:checked')].map((el) => el.getAttribute('data-id'));
 }
@@ -535,7 +654,8 @@ async function loadPreview() {
   const mode = document.querySelector('input[name="dataMode"]:checked')?.value || 'backup';
   const j = await api('/api/uninstall/preview', { dir: state.defs.dir, dataMode: mode, selectedIds: selectedScanIds(), scan: state.scan });
   state.preview = j;
-  $('backupPath').textContent = j.backupPath ? ('Backup file: ' + j.backupPath) : (mode === 'keep' ? 'User data will stay in the install folders you keep data in.' : 'No backup will be written.');
+  const counts = (j.userData && j.userData.length) ? (' Will include ' + j.userData.length + ' user-data paths (data/, config, summaries, workspaces).') : '';
+  $('backupPath').textContent = j.backupPath ? ('Backup file: ' + j.backupPath + counts) : (mode === 'keep' ? 'User data will stay in the install folders you keep data in.' : 'No backup will be written.');
 }
 async function drawConfirm() {
   await loadPreview();
@@ -555,9 +675,12 @@ async function runUninstall() {
   const mode = document.querySelector('input[name="dataMode"]:checked')?.value || 'backup';
   const j = await api('/api/uninstall', { dir: state.defs.dir, dataMode: mode, backupPath: state.preview?.backupPath, dryRun: false, selectedIds: selectedScanIds(), scan: state.scan });
   if (j.ok) {
-    log.textContent = (j.actions||[]).map(a => (a.action||'') + (a.path?('  '+a.path):'')).join('\n');
-    $('undoneLead').innerHTML = (j.backup && j.backup.path) ? ('A backup is at <span class="mono">'+esc(j.backup.path)+'</span>.') : 'No backup was written.';
+    log.textContent = (j.actions||[]).map(a => (a.action||'') + (a.path?('  '+a.path):'') + (a.pid?('  PID '+a.pid):'')).join('\n');
+    if (j.backup && j.backup.counts) log.textContent += '\nBackup counts: ' + countsLine(j.backup.counts);
+    const countHtml = (j.backup && j.backup.counts) ? (' Backup wrote ' + esc(countsLine(j.backup.counts)) + '.') : '';
+    $('undoneLead').innerHTML = (j.backup && j.backup.path) ? ('A backup is at <span class="mono">'+esc(j.backup.path)+'</span>.'+countHtml) : 'No backup was written.';
     step = FLOWS.uninstall.indexOf('undone'); show();
+    renderStillRunning(j.stillRunning || [], j.backup && j.backup.counts);
   } else { log.textContent += '\nSTOPPED: '+(j.error||'Uninstall failed'); $('backBtn').hidden = false; }
 }
 
@@ -587,6 +710,15 @@ $('nextBtn').onclick = async () => {
   if (id === 'confirm') { if ($('confirmText').value.trim() !== 'UNINSTALL') return; flow='uninstall'; step=FLOWS.uninstall.indexOf('unprogress'); await runUninstall(); return; }
   if (step < FLOWS[flow].length-1) { step++; show(); }
 };
+$('restoreBrowse').onclick = async () => {
+  const j = await api('/api/browse-backup', {});
+  if (j.ok && j.path) { $('restorePath').value = j.path; await inspectRestore(); }
+  else if (j.error === 'not available') {
+    const typed = prompt('Type the path of a ClaudeCrew-backup-*.zip:');
+    if (typed) { $('restorePath').value = typed; await inspectRestore(); }
+  }
+};
+$('restorePath').addEventListener('change', inspectRestore);
 $('browseBtn').onclick = async () => {
   const j = await api('/api/browse-folder', { current: $('folderPath').value });
   if (j.ok && j.path) { $('folderPath').value = j.path; await checkFolder(); }

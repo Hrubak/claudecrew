@@ -8,6 +8,7 @@ const { execFile, spawn } = require('child_process');
 const setup = require('./lib/setup');
 const uninstall = require('./lib/uninstall');
 const scan = require('./lib/scan');
+const backup = require('./lib/backup');
 
 const ROOT = __dirname;
 const args = process.argv.slice(2);
@@ -17,7 +18,14 @@ const opt = (name, fallback) => {
   return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : fallback;
 };
 
-const START_DIR = path.resolve(opt('dir', ROOT));
+const START_DIR = setup.normalizeInstallDir(opt('dir', ROOT));
+function dirArg(value) { return setup.normalizeInstallDir(value || START_DIR); }
+
+async function listBackups(extra) {
+  return { ok: true, backups: backup.findBackupZips({ extra: extra || [] }) };
+}
+
+
 const WANT_UNINSTALL = flag('uninstall');
 const WANT_SCAN = flag('scan');
 const DRY_RUN = flag('dry-run');
@@ -69,6 +77,9 @@ async function handle(req, res) {
     }
     if (req.method === 'GET' && url.pathname === '/api/defaults') return send(res, 200, defaults());
     if (req.method === 'GET' && url.pathname === '/api/prereqs') return send(res, 200, await setup.checkPrereqs());
+    if (req.method === 'GET' && url.pathname === '/api/backups') {
+      return send(res, 200, await listBackups((url.searchParams.get('extra') || '').split(',').filter(Boolean)));
+    }
     if (req.method === 'GET' && url.pathname === '/api/uninstall/scan') {
       const result = await scan.scanCrew({
         currentDir: url.searchParams.get('dir') || START_DIR,
@@ -96,6 +107,45 @@ async function handle(req, res) {
     }
     if (req.method !== 'POST') return send(res, 404, { error: 'not found' });
     const body = JSON.parse((await readBody(req)) || '{}');
+
+    if (url.pathname === '/api/backups/inspect') {
+      try { return send(res, 200, backup.inspectBackup(body.path)); }
+      catch (err) { return send(res, 400, { ok: false, error: err.message, unsafe: err.unsafe }); }
+    }
+    if (url.pathname === '/api/backups/preview') {
+      try { return send(res, 200, backup.previewRestore(body.path, dirArg(body.dir), { selected: body.selected })); }
+      catch (err) { return send(res, 400, { ok: false, error: err.message }); }
+    }
+    if (url.pathname === '/api/backups/restore') {
+      try {
+        const result = await backup.restoreBackup({
+          file: body.path,
+          destDir: dirArg(body.dir),
+          mode: body.mode,
+          selected: body.selected,
+          confirmReplace: !!body.confirmReplace,
+        });
+        return send(res, result.ok || result.needsConfirm || result.cancelled ? 200 : 400, result);
+      } catch (err) { return send(res, 400, { ok: false, error: err.message }); }
+    }
+    if (url.pathname === '/api/browse-backup') {
+      const result = await setup.browseBackup({ scriptPath: path.join(ROOT, 'browse-backup.ps1') });
+      return send(res, result.ok ? 200 : (result.error === 'not available' ? 501 : 200), result);
+    }
+    if (url.pathname === '/api/uninstall/retry-stop') {
+      try {
+        const actions = await uninstall.stopSelectedProcesses(body.processes || [], {
+          platform: process.platform, selfPid: process.pid, selfPpid: process.ppid,
+        });
+        let stillRunning = [];
+        try {
+          const next = await scan.scanCrew({ currentDir: START_DIR, extraDirs: [START_DIR], scriptPath: path.join(ROOT, 'scan-inventory.ps1') });
+          stillRunning = uninstall.stillRunningFromScan(next, { excludedPids: uninstall.excludedUninstallPids(next.groups && next.groups.processes || [], { selfPid: process.pid, selfPpid: process.ppid }) });
+        } catch { /* best-effort */ }
+        return send(res, 200, { ok: true, actions, stillRunning });
+      } catch (err) { return send(res, 400, { ok: false, error: err.message }); }
+    }
+
 
     if (url.pathname === '/api/prereqs/install') {
       const kind = body.kind;
@@ -130,7 +180,7 @@ async function handle(req, res) {
       }
     }
     if (url.pathname === '/api/check-folder') {
-      return send(res, 200, await setup.checkFolder(body.path, { expectedUrl: body.url, expectedBranch: body.branch }));
+      return send(res, 200, await setup.checkFolder(dirArg(body.path), { expectedUrl: body.url, expectedBranch: body.branch }));
     }
     if (url.pathname === '/api/browse-folder') {
       const result = await setup.browseFolder({
@@ -146,12 +196,27 @@ async function handle(req, res) {
         const src = setup.resolveSource(body);
         log('Source: ' + src.url + ' @ ' + src.branch);
         const result = await setup.install({
-          dest: body.dir,
+          dest: dirArg(body.dir),
           url: src.url,
           branch: src.branch,
           settings: body.settings || {},
           autostart: !!body.autostart,
           log,
+          onBeforeConfig: async (dir, logFn) => {
+            const r = body.restore;
+            if (!r || r.skip || !r.path) return;
+            logFn('Restoring data from backup ' + r.path);
+            const out = await backup.restoreBackup({
+              file: r.path, destDir: dir, mode: r.mode || 'merge', selected: r.selected,
+              confirmReplace: !!r.confirmReplace || r.mode === 'replace',
+              log: logFn,
+            });
+            if (out.needsConfirm) throw new Error('Restore needs a conflict choice (Merge or Replace).');
+            if (!out.ok && !out.cancelled) throw new Error(out.error || 'Restore failed.');
+            if (out.ok && out.counts) {
+              logFn('Restored ' + out.counts.restored + ' files; skipped ' + out.counts.skipped + ' (secrets: ' + out.counts.secrets + ').');
+            }
+          },
         });
         if (process.platform === 'win32') {
           await createWindowsExtras(result.dir, { autostart: !!body.autostart, log });
@@ -185,6 +250,7 @@ async function handle(req, res) {
         if (dryRun) {
           const result = await uninstall.runScanUninstall({
             scanResult, selectedIds: body.selectedIds, dataMode, dryRun: true, backupPath: body.backupPath || preview.backupPath, sourceRoot: ROOT,
+            selfPid: process.pid, selfPpid: process.ppid,
           });
           return send(res, 200, result);
         }
@@ -207,6 +273,7 @@ async function handle(req, res) {
         }
         const result = await uninstall.runScanUninstall({
           scanResult, selectedIds: body.selectedIds, dataMode, dryRun: false, backupPath: body.backupPath || preview.backupPath, sourceRoot: ROOT,
+          selfPid: process.pid, selfPpid: process.ppid,
         });
         return send(res, 200, result);
       } catch (err) {

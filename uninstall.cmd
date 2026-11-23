@@ -17,7 +17,7 @@ if not errorlevel 1 (
   "%NODE_EXE%" "%~dp0scripts\crew-scan.js" %*
   exit /b %ERRORLEVEL%
 )
-"%NODE_EXE%" "%~dp0setup-wizard.js" --uninstall --dir "%~dp0" %*
+"%NODE_EXE%" "%~dp0setup-wizard.js" --uninstall --dir "%~dp0." %*
 echo.
 echo ^(You can close this window now.^)
 pause >nul

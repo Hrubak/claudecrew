@@ -1898,6 +1898,21 @@
       $('#unMode').onchange = refreshUn;
       $('#unScanList').addEventListener('change', refreshUn);
       $('#unConfirm').oninput = () => { unGo.disabled = $('#unConfirm').value.trim() !== 'UNINSTALL'; };
+      const renderStill = (items) => {
+        const box = $('#unStill');
+        if (!box) return;
+        if (!items || !items.length) { box.hidden = true; box.innerHTML = ''; return; }
+        box.hidden = false;
+        box.className = 'errbox';
+        box.innerHTML = '<b>Still running</b><ul class="filelist">' + items.map((p) => '<li>PID ' + esc(p.pid) + ' ' + esc(p.name || '') + '</li>').join('') + '</ul><p><button type="button" class="btn danger" id="unRetry">Retry stop</button></p>';
+        const btn = $('#unRetry');
+        if (btn) btn.onclick = async () => {
+          btn.disabled = true; btn.textContent = 'Stopping…';
+          const r = await api('/api/uninstall/retry-stop', { processes: items });
+          renderStill(r.stillRunning || []);
+          if (!(r.stillRunning && r.stillRunning.length)) { box.className = 'okbox'; box.innerHTML = 'No Crew processes are still running.'; box.hidden = false; }
+        };
+      };
       unGo.onclick = async () => {
         if ($('#unConfirm').value.trim() !== 'UNINSTALL') return;
         unGo.disabled = true; unGo.textContent = 'Uninstalling…';
@@ -1905,8 +1920,73 @@
         const r = await api('/api/uninstall', { dataMode: $('#unMode').value, backupPath: prev.backupPath, selectedIds: selectedUnIds(), scan: unScan });
         if (r.ok || r.handedOff) {
           $('#unList').className = 'okbox';
-          $('#unList').innerHTML = 'Crew is stopping. ' + (r.backup && r.backup.path ? 'Backup: <span class="mono">' + esc(r.backup.path) + '</span>' : 'No backup was written.');
+          const counts = r.backup && r.backup.counts ? (' Wrote ' + r.backup.counts.files + ' files (' + r.backup.counts.bytes + ' bytes).') : '';
+          $('#unList').innerHTML = 'Crew is stopping. ' + (r.backup && r.backup.path ? 'Backup: <span class="mono">' + esc(r.backup.path) + '</span>.' + counts : 'No backup was written.');
+          renderStill(r.stillRunning || []);
         } else { $('#unList').className = 'errbox'; $('#unList').textContent = r.error || 'Uninstall failed'; unGo.disabled = false; unGo.textContent = 'Confirm uninstall'; }
+      };
+
+      const impOpen = $('#impOpen'), impPanel = $('#impPanel');
+      const selectedImp = () => [...impPanel.querySelectorAll('input[type=checkbox][data-name]:checked')].map((el) => el.getAttribute('data-name'));
+      const loadImp = async () => {
+        const j = await fetch('/api/backups').then((r) => r.json()).catch((e) => ({ backups: [], error: e.message }));
+        const det = $('#impDetected');
+        const backups = j.backups || [];
+        det.innerHTML = backups.length
+          ? backups.map((b, i) => '<label class="srow" style="cursor:pointer"><input type="radio" name="impPick" value="' + esc(b.path) + '" ' + (i===0?'checked':'') + '> <div class="l"><b>' + esc(b.name) + '</b><p>' + esc(b.path) + '</p></div></label>').join('')
+          : '<div class="warnbox">No ClaudeCrew-backup-*.zip found in your user profile. Browse for one.</div>';
+        if (backups[0] && !$('#impPath').value) $('#impPath').value = backups[0].path;
+        det.querySelectorAll('input[name=impPick]').forEach((el) => el.addEventListener('change', () => { $('#impPath').value = el.value; inspectImp(); }));
+        await inspectImp();
+      };
+      const inspectImp = async () => {
+        const path = $('#impPath').value.trim();
+        const list = $('#impList'), conflict = $('#impConflict'), msg = $('#impMsg');
+        conflict.hidden = true; msg.textContent = '';
+        if (!path) { list.innerHTML = ''; return; }
+        const info = await api('/api/backups/inspect', { path });
+        if (info.error) { list.innerHTML = '<div class="errbox">' + esc(info.error) + '</div>'; return; }
+        const secrets = (info.secrets || []).map((n) => '<li>' + esc(n) + '</li>').join('');
+        const warns = (info.warnings || []).map((w) => '<li>' + esc(w) + '</li>').join('');
+        list.innerHTML = '<p class="small">' + (info.manifest ? 'Manifest v' + (info.manifest.version||1) + ', ' : 'Older backup, inferred layout. ') + (info.counts && info.counts.files) + ' files.</p>'
+          + (warns ? '<div class="warnbox"><ul class="filelist">' + warns + '</ul></div>' : '')
+          + (secrets ? '<div class="warnbox"><b>Secrets will be skipped</b><ul class="filelist">' + secrets + '</ul></div>' : '')
+          + (info.items||[]).filter((i)=>!i.secret).map((it) => '<label class="srow" style="cursor:pointer"><input type="checkbox" data-name="' + esc(it.name) + '" checked> <div class="l"><b>' + esc(it.kind) + '</b><p>' + esc(it.name) + '</p></div></label>').join('');
+        const prev = await api('/api/backups/preview', { path, selected: selectedImp() });
+        if (prev.conflicts && prev.conflicts.length) {
+          conflict.hidden = false;
+          conflict.className = 'errbox';
+          conflict.innerHTML = '<b>Conflicts</b><ul class="filelist">' + prev.conflicts.map((c) => '<li>' + esc(c.rel) + '</li>').join('') + '</ul>'
+            + '<div class="srow"><label><input type="radio" name="impMode" value="merge" checked> Merge (keep existing)</label></div>'
+            + '<div class="srow"><label><input type="radio" name="impMode" value="replace"> Replace (back up current files first)</label></div>'
+            + '<label class="srow"><input type="checkbox" id="impConfirmReplace"> I understand Replace will overwrite the files listed above.</label>';
+        }
+      };
+      if (impOpen) impOpen.onclick = async () => { impPanel.hidden = false; impOpen.disabled = true; await loadImp(); };
+      const impBrowse = $('#impBrowse');
+      if (impBrowse) impBrowse.onclick = async () => {
+        const j = await api('/api/browse-backup', {});
+        if (j.ok && j.path) { $('#impPath').value = j.path; await inspectImp(); }
+        else if (j.error === 'not available') { const t = prompt('Path to a ClaudeCrew-backup-*.zip:'); if (t) { $('#impPath').value = t; await inspectImp(); } }
+      };
+      const impPath = $('#impPath');
+      if (impPath) impPath.addEventListener('change', inspectImp);
+      const impGo = $('#impGo');
+      if (impGo) impGo.onclick = async () => {
+        const path = $('#impPath').value.trim();
+        if (!path) return;
+        const mode = document.querySelector('input[name="impMode"]:checked')?.value || ( $('#impConflict') && !$('#impConflict').hidden ? 'merge' : 'replace');
+        const confirmReplace = !!$('#impConfirmReplace')?.checked;
+        if (mode === 'replace' && !confirmReplace && $('#impConflict') && !$('#impConflict').hidden) { $('#impMsg').className = 'errbox'; $('#impMsg').textContent = 'Confirm Replace before continuing.'; return; }
+        impGo.disabled = true; impGo.textContent = 'Restoring…';
+        const r = await api('/api/backups/restore', { path, selected: selectedImp(), mode, confirmReplace: mode === 'replace', restart: true });
+        const msg = $('#impMsg');
+        if (r.needsConfirm) { msg.className = 'errbox'; msg.textContent = 'Conflicts need Merge or Replace.'; impGo.disabled = false; impGo.textContent = 'Restore into this install'; return; }
+        if (r.ok) {
+          msg.className = 'okbox';
+          msg.innerHTML = 'Restored ' + (r.counts && r.counts.restored) + ' files. Skipped ' + (r.counts && r.counts.skipped) + ' (secrets: ' + (r.counts && r.counts.secrets) + ').'
+            + (r.restarting ? ' Crew is restarting…' : '');
+        } else { msg.className = 'errbox'; msg.textContent = r.error || 'Restore failed'; impGo.disabled = false; impGo.textContent = 'Restore into this install'; }
       };
     }
 
@@ -1921,6 +2001,19 @@
         <div class="scard" id="swCard"><div class="srow"><div class="l"><b>Current source</b><p>Loading…</p></div></div></div>
         <div id="swWarn" hidden></div>
         <div class="srow2" style="margin-bottom:14px"><button class="btn primary" id="swGo" type="button" disabled>Switch and restart</button></div>
+        <div class="ssh"><h4>Import backup</h4></div>
+        <div class="scard" id="impCard">
+          <div class="srow"><div class="l"><b>Import backup</b><p>Restore <span class="mono">data/</span>, config, summaries and workspaces from a <span class="mono">ClaudeCrew-backup-*.zip</span> into this install. Secrets are never restored. Crew will stop and restart after a successful restore.</p></div>
+            <button class="btn" id="impOpen" type="button">Import backup</button></div>
+          <div id="impPanel" hidden>
+            <div id="impDetected"></div>
+            <div class="srow"><div class="l"><b>Backup zip</b></div><div class="pathctl"><input class="stx" id="impPath" spellcheck="false"><button class="btn" type="button" id="impBrowse">Browse…</button></div></div>
+            <div id="impList"></div>
+            <div id="impConflict" hidden></div>
+            <div id="impMsg"></div>
+            <div class="srow2"><button class="btn primary" id="impGo" type="button">Restore into this install</button></div>
+          </div>
+        </div>
         <div class="ssh"><h4>Danger zone</h4></div>
         <div class="scard" id="unCard">
           <div class="srow"><div class="l"><b>Uninstall Claude Crew</b><p>Stop Crew, remove shortcuts and autostart, and choose what happens to your data. External project folders are never deleted.</p></div>
@@ -1930,6 +2023,7 @@
             <div class="srow"><div class="l"><b>Your data</b><p>Backup is the default. The zip is written outside every selected install folder.</p></div>
               <select class="stx" id="unMode"><option value="backup" selected>Back up (recommended)</option><option value="keep">Keep data in the folder</option><option value="delete">Delete everything</option></select></div>
             <div id="unList" class="errbox" hidden></div>
+            <div id="unStill" hidden></div>
             <div class="srow"><div class="l"><b>Type UNINSTALL to confirm</b></div><input class="stx" id="unConfirm" placeholder="UNINSTALL" autocomplete="off"></div>
             <div class="srow2"><button class="btn danger" id="unGo" type="button" disabled>Confirm uninstall</button></div>
           </div>
